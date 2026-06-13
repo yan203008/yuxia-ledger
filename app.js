@@ -1,0 +1,270 @@
+const STORAGE_KEY = "yuxia-ledger-v1";
+const today = () => new Date().toLocaleDateString("sv-SE");
+const uid = () => crypto.randomUUID();
+const money = value => new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY", minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value);
+
+const defaultState = {
+  projects: [],
+  types: ["餐饮", "零食", "交通", "购物", "日用", "娱乐", "医疗", "其他"],
+  presets: [
+    { id: uid(), name: "奶茶", keywords: ["奶茶", "霸王茶姬", "喜茶"], type: "零食" },
+    { id: uid(), name: "打车", keywords: ["打车", "滴滴", "出租车"], type: "交通" },
+    { id: uid(), name: "午饭", keywords: ["午饭", "午餐"], type: "餐饮" }
+  ]
+};
+
+let state = loadState();
+let route = { page: "home", projectId: null };
+
+function loadState() {
+  try { return normalizeState(JSON.parse(localStorage.getItem(STORAGE_KEY)) || structuredClone(defaultState)); }
+  catch { return structuredClone(defaultState); }
+}
+function normalizeState(value) {
+  if (!value || !Array.isArray(value.projects) || !Array.isArray(value.types) || !Array.isArray(value.presets)) throw new Error("Invalid data");
+  value.projects.forEach(project => {
+    if (!project.id || typeof project.name !== "string" || !Number.isFinite(Number(project.total)) || !Array.isArray(project.records)) throw new Error("Invalid project");
+    project.records.forEach(record => {
+      if (!record.id || typeof record.name !== "string" || !Number.isFinite(Number(record.amount)) || typeof record.date !== "string") throw new Error("Invalid record");
+    });
+  });
+  return value;
+}
+function saveState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+function remaining(project) { return project.total - project.records.reduce((sum, item) => sum + Number(item.amount), 0); }
+function escapeHtml(value = "") { return String(value).replace(/[&<>"]/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[char])); }
+function formatDate(value) { return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" }).format(new Date(`${value}T12:00:00`)); }
+
+const sortOptions = {
+  "date-desc": "最新优先",
+  "date-asc": "最早优先",
+  "amount-desc": "金额从高到低",
+  "amount-asc": "金额从低到高"
+};
+
+function sortedRecords(project, records = project.records) {
+  const mode = project.sortMode || "date-desc";
+  return [...records].sort((a, b) => {
+    if (mode === "date-asc") return a.date.localeCompare(b.date);
+    if (mode === "amount-desc") return Number(b.amount) - Number(a.amount);
+    if (mode === "amount-asc") return Number(a.amount) - Number(b.amount);
+    return b.date.localeCompare(a.date);
+  });
+}
+
+function recordTypes(project) {
+  return [...new Set(project.records.map(record => record.type || "未分类"))].sort((a, b) => a.localeCompare(b, "zh-CN"));
+}
+
+function filteredRecords(project) {
+  const selected = project.filterType || "all";
+  const records = selected === "all"
+    ? project.records
+    : project.records.filter(record => (record.type || "未分类") === selected);
+  return sortedRecords(project, records);
+}
+
+function categoryStats(project) {
+  const totals = new Map();
+  project.records.forEach(record => {
+    const type = record.type || "未分类";
+    totals.set(type, (totals.get(type) || 0) + Number(record.amount));
+  });
+  const spent = [...totals.values()].reduce((sum, value) => sum + value, 0);
+  return [...totals.entries()]
+    .map(([type, amount]) => ({ type, amount, percent: spent ? amount / spent * 100 : 0 }))
+    .sort((a, b) => b.amount - a.amount);
+}
+
+function dailyStats(project) {
+  const totals = new Map();
+  project.records.forEach(record => totals.set(record.date, (totals.get(record.date) || 0) + Number(record.amount)));
+  const recordDates = project.records.map(record => record.date).sort();
+  const endText = recordDates.at(-1) > today() ? recordDates.at(-1) : today();
+  const end = new Date(`${endText}T12:00:00`);
+  const start = new Date(`${recordDates[0] || project.createdAt || today()}T12:00:00`);
+  const days = [];
+  for (const cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
+    const date = cursor.toLocaleDateString("sv-SE");
+    days.push({ date, amount: totals.get(date) || 0 });
+  }
+  return days;
+}
+
+function navigate(page, projectId = null) { route = { page, projectId }; closeSheet(); render(); scrollTo(0, 0); }
+function toast(message) { const el = document.querySelector("#toast"); el.textContent = message; el.classList.add("show"); setTimeout(() => el.classList.remove("show"), 1800); }
+
+function render() {
+  const app = document.querySelector("#app");
+  if (route.page === "project") app.innerHTML = projectView();
+  else if (route.page === "settings") app.innerHTML = settingsView();
+  else app.innerHTML = homeView();
+  bindPageEvents();
+  const dailyScroll = document.querySelector(".daily-scroll");
+  if (dailyScroll) requestAnimationFrame(() => requestAnimationFrame(() => {
+    dailyScroll.scrollLeft = Math.max(0, dailyScroll.scrollWidth - dailyScroll.clientWidth);
+  }));
+}
+
+function homeView() {
+  return `<main class="app-shell">
+    <header class="topbar"><div><p class="eyebrow">我的资金计划</p><h1>余下</h1></div><button class="icon-button" data-action="settings" aria-label="设置">⚙︎</button></header>
+    <section class="project-list">
+      ${state.projects.length ? state.projects.map(project => {
+        const left = remaining(project); const percent = Math.max(0, Math.min(100, left / project.total * 100));
+        return `<button class="project-card" data-project="${project.id}"><div class="project-card-top"><div><h2>${escapeHtml(project.name)}</h2><span class="subtle">总额 ${money(project.total)}</span></div><div><div class="subtle">剩余</div><div class="balance">${money(left)}</div></div></div><div class="progress"><span style="width:${percent}%"></span></div></button>`;
+      }).join("") : `<div class="empty">还没有资金项目。<br>建立第一个项目后就可以开始记账。</div>`}
+    </section>
+    <div class="fab-bar"><button class="primary" data-action="new-project">＋ 新增项目</button></div>
+  </main>`;
+}
+
+function projectView() {
+  const project = state.projects.find(item => item.id === route.projectId);
+  if (!project) { route = { page: "home", projectId: null }; return homeView(); }
+  const records = filteredRecords(project);
+  const types = recordTypes(project);
+  const stats = categoryStats(project);
+  const days = dailyStats(project);
+  const maxDaily = Math.max(...days.map(day => day.amount), 1);
+  const spent = project.total - remaining(project);
+  return `<main class="app-shell">
+    <header class="topbar"><button class="back-button" data-action="home">‹ 所有项目</button><button class="icon-button" data-action="edit-project" aria-label="编辑项目">•••</button></header>
+    <section class="balance-card"><div class="label">${escapeHtml(project.name)} · 剩余</div><div class="big-number">${money(remaining(project))}</div><div class="balance-meta"><span>总额 ${money(project.total)}</span><span>已用 ${money(project.total - remaining(project))}</span></div></section>
+    <div class="section-title"><h2>消费记录</h2><div class="record-tools"><button class="sort-button" data-action="filter-records">${(project.filterType || "all") === "all" ? "全部分类" : escapeHtml(project.filterType)}⌄</button><button class="sort-button" data-action="sort-records">${sortOptions[project.sortMode || "date-desc"]}⌄</button></div></div>
+    <div class="record-count">${records.length} 笔记录${(project.filterType || "all") !== "all" ? ` · ${escapeHtml(project.filterType)}` : ""}</div>
+    ${records.length ? `<section class="record-list">${records.map(record => `<button class="record" data-record="${record.id}"><span class="record-name">${escapeHtml(record.name)}</span><span class="record-amount">-${money(record.amount)}</span><span class="record-meta">${escapeHtml(record.type || "未分类")}</span><span class="record-meta">${formatDate(record.date)}</span></button>`).join("")}</section>` : `<div class="empty compact-empty">这个分类下还没有消费记录。</div>`}
+    <div class="section-title"><h2>消费分类</h2><span class="subtle">共 ${money(spent)}</span></div>
+    ${stats.length ? `<section class="dashboard-card">${stats.map((item, index) => `<div class="category-row"><div class="category-meta"><strong>${escapeHtml(item.type)}</strong><span>${money(item.amount)} · ${item.percent.toFixed(1)}%</span></div><div class="category-track"><span class="category-fill tone-${index % 5}" style="width:${item.percent}%"></span></div></div>`).join("")}</section>` : `<section class="dashboard-card dashboard-empty">还没有可统计的数据</section>`}
+    <div class="section-title"><h2>每日消费</h2><span class="subtle">全部记录</span></div>
+    <section class="daily-card">${project.records.length ? `<div class="daily-scroll"><div class="daily-chart">${days.map((day, index) => `<div class="daily-column" title="${day.date} ${money(day.amount)}"><span class="daily-value">${day.amount ? money(day.amount) : ""}</span><div class="daily-bar-wrap"><span class="daily-bar" style="height:${day.amount ? Math.max(5, day.amount / maxDaily * 100) : 0}%"></span></div><span class="daily-label">${index === 0 || index === days.length - 1 || day.date.endsWith("-01") ? formatDate(day.date) : new Date(`${day.date}T12:00:00`).getDate()}</span></div>`).join("")}</div></div>` : `<div class="dashboard-empty">还没有可展示的数据</div>`}</section>
+    <div class="fab-bar"><button class="primary" data-action="new-record">＋ 记一笔</button></div>
+  </main>`;
+}
+
+function settingsView() {
+  return `<main class="app-shell">
+    <header class="topbar"><button class="back-button" data-action="home">‹ 返回</button><h1 style="font-size:24px">设置</h1><span style="width:42px"></span></header>
+    <section class="settings-section"><div class="section-title"><h2>消费类型</h2><button class="text-button" data-action="new-type">＋ 新增</button></div><p>记账时可以选择，也可以留空。</p><div class="pills">${state.types.map(type => `<button class="pill" data-type="${escapeHtml(type)}">${escapeHtml(type)}</button>`).join("")}</div></section>
+    <section class="settings-section"><div class="section-title"><h2>常用消费名称</h2><button class="text-button" data-action="new-preset">＋ 新增</button></div><p>关键词命中时自动填写关联类型。没有关联类型时保持空白。</p><div class="setting-card">${state.presets.length ? state.presets.map(preset => `<button class="setting-row" data-preset="${preset.id}"><span><strong>${escapeHtml(preset.name)}</strong><span class="subtle">${escapeHtml(preset.keywords.join("、") || "无关键词")}</span></span><span class="subtle">${escapeHtml(preset.type || "未关联")} ›</span></button>`).join("") : `<div class="empty" style="padding:35px 10px">还没有常用名称</div>`}</div></section>
+    <section class="settings-section"><div class="section-title"><h2>数据</h2></div><p>账目只保存在当前设备。更换手机或清理浏览器数据前，请先导出备份。</p><div class="setting-card"><button class="setting-row" data-action="export"><span><strong>导出备份</strong><span class="subtle">保存为 JSON 文件</span></span><span>›</span></button><button class="setting-row" data-action="import"><span><strong>导入备份</strong><span class="subtle">从备份文件恢复数据</span></span><span>›</span></button></div></section>
+  </main>`;
+}
+
+function bindPageEvents() {
+  document.querySelectorAll("[data-project]").forEach(el => el.onclick = () => navigate("project", el.dataset.project));
+  document.querySelectorAll("[data-record]").forEach(el => el.onclick = () => openRecordSheet(el.dataset.record));
+  document.querySelectorAll("[data-preset]").forEach(el => el.onclick = () => openPresetSheet(el.dataset.preset));
+  document.querySelectorAll("[data-type]").forEach(el => el.onclick = () => openTypeSheet(el.dataset.type));
+  document.querySelectorAll("[data-action]").forEach(el => {
+    const action = el.dataset.action;
+    if (action === "settings") el.onclick = () => navigate("settings");
+    if (action === "home") el.onclick = () => navigate("home");
+    if (action === "new-project") el.onclick = () => openProjectSheet();
+    if (action === "edit-project") el.onclick = () => openProjectSheet(route.projectId);
+    if (action === "new-record") el.onclick = () => openRecordSheet();
+    if (action === "filter-records") el.onclick = openFilterSheet;
+    if (action === "sort-records") el.onclick = openSortSheet;
+    if (action === "new-type") el.onclick = () => openTypeSheet();
+    if (action === "new-preset") el.onclick = () => openPresetSheet();
+    if (action === "export") el.onclick = exportData;
+    if (action === "import") el.onclick = () => document.querySelector("#import-file").click();
+  });
+}
+
+function sheet(title, fields, actions = "") {
+  document.querySelector("#sheet-root").innerHTML = `<div class="sheet-backdrop"><section class="sheet" role="dialog" aria-modal="true"><div class="grabber"></div><div class="sheet-head"><h2>${title}</h2><button class="close" data-close>×</button></div>${fields}${actions}</section></div>`;
+  document.querySelector("[data-close]").onclick = closeSheet;
+  document.querySelector(".sheet-backdrop").onclick = event => { if (event.target.classList.contains("sheet-backdrop")) closeSheet(); };
+}
+function closeSheet() { document.querySelector("#sheet-root").innerHTML = ""; }
+
+function openSortSheet() {
+  const project = state.projects.find(item => item.id === route.projectId);
+  const selected = project.sortMode || "date-desc";
+  sheet("记录排序", `<div class="choice-list">${Object.entries(sortOptions).map(([value, label]) => `<button class="choice-row ${value === selected ? "selected" : ""}" data-sort="${value}"><span>${label}</span><span>${value === selected ? "✓" : ""}</span></button>`).join("")}</div>`);
+  document.querySelectorAll("[data-sort]").forEach(button => button.onclick = () => {
+    project.sortMode = button.dataset.sort;
+    saveState();
+    closeSheet();
+    render();
+  });
+}
+
+function openFilterSheet() {
+  const project = state.projects.find(item => item.id === route.projectId);
+  const selected = project.filterType || "all";
+  const options = [["all", "全部分类"], ...recordTypes(project).map(type => [type, type])];
+  sheet("筛选消费分类", `<div class="choice-list">${options.map(([value, label]) => `<button class="choice-row ${value === selected ? "selected" : ""}" data-filter-choice="${escapeHtml(value)}"><span>${escapeHtml(label)}</span><span>${value === selected ? "✓" : ""}</span></button>`).join("")}</div>`);
+  document.querySelectorAll("[data-filter-choice]").forEach(button => button.onclick = () => {
+    project.filterType = button.dataset.filterChoice;
+    saveState();
+    closeSheet();
+    render();
+  });
+}
+
+function openProjectSheet(projectId = null) {
+  const project = state.projects.find(item => item.id === projectId);
+  sheet(project ? "调整项目" : "新增项目", `<form id="project-form"><label class="field"><span>项目名称</span><input name="name" required maxlength="30" value="${escapeHtml(project?.name || "")}" placeholder="例如：本月生活费"></label><label class="field"><span>总金额</span><input name="total" required type="number" min="0" step="0.01" inputmode="decimal" value="${project?.total ?? ""}" placeholder="¥ 0"></label><div class="sheet-actions">${project ? `<button class="danger" type="button" data-delete>删除</button>` : ""}<button class="primary" type="submit">保存</button></div></form>`);
+  document.querySelector("#project-form").onsubmit = event => { event.preventDefault(); const data = new FormData(event.currentTarget); if (project) { project.name = data.get("name").trim(); project.total = Number(data.get("total")); } else state.projects.push({ id: uid(), name: data.get("name").trim(), total: Number(data.get("total")), createdAt: today(), records: [] }); saveState(); closeSheet(); navigate(project ? "project" : "home", project?.id); toast("项目已保存"); };
+  if (project) document.querySelector("[data-delete]").onclick = () => { if (confirm(`确定删除“${project.name}”及其全部记录吗？`)) { state.projects = state.projects.filter(item => item.id !== project.id); saveState(); closeSheet(); navigate("home"); } };
+}
+
+function findMatchedType(name) {
+  const query = name.trim().toLowerCase();
+  if (!query) return "";
+  const candidates = state.presets.flatMap(preset => [preset.name, ...preset.keywords].filter(Boolean).map(keyword => ({ keyword: keyword.toLowerCase(), type: preset.type })));
+  return candidates.filter(item => query.includes(item.keyword) || item.keyword.includes(query)).sort((a, b) => b.keyword.length - a.keyword.length)[0]?.type || "";
+}
+
+function typeOptions(selected = "") { return `<option value="">不选择</option>${state.types.map(type => `<option value="${escapeHtml(type)}" ${type === selected ? "selected" : ""}>${escapeHtml(type)}</option>`).join("")}`; }
+
+function openRecordSheet(recordId = null) {
+  const project = state.projects.find(item => item.id === route.projectId);
+  const record = project.records.find(item => item.id === recordId);
+  sheet(record ? "编辑记录" : "记一笔", `<form id="record-form"><label class="field"><span>消费名称</span><input name="name" required maxlength="40" autocomplete="off" value="${escapeHtml(record?.name || "")}" placeholder="例如：霸王茶姬"></label><label class="field"><span>消费类型</span><select name="type">${typeOptions(record?.type || "")}</select></label><div class="helper" data-match-helper>${record?.type ? "可以手动修改" : "匹配到预设时会自动填写，也可以留空"}</div><label class="field"><span>金额</span><input name="amount" required type="number" min="0.01" step="0.01" inputmode="decimal" value="${record?.amount ?? ""}" placeholder="¥ 0"></label><label class="field"><span>日期</span><input name="date" required type="date" value="${record?.date || today()}"></label><div class="helper">默认记录创建当天，可修改</div><div class="sheet-actions">${record ? `<button class="danger" type="button" data-delete>删除</button>` : ""}<button class="primary" type="submit">保存并扣减</button></div></form>`);
+  const form = document.querySelector("#record-form"); const nameInput = form.elements.name; const typeSelect = form.elements.type; let autoType = !record;
+  nameInput.oninput = () => { if (!autoType) return; const matched = findMatchedType(nameInput.value); typeSelect.value = matched; document.querySelector("[data-match-helper]").textContent = matched ? `已根据消费名称匹配到“${matched}”` : "没有匹配预设，类型可以留空"; };
+  typeSelect.onchange = () => { autoType = false; document.querySelector("[data-match-helper]").textContent = "已手动选择，不会被名称覆盖"; };
+  form.onsubmit = event => { event.preventDefault(); const data = new FormData(form); const next = { id: record?.id || uid(), name: data.get("name").trim(), type: data.get("type"), amount: Number(data.get("amount")), date: data.get("date") }; if (record) Object.assign(record, next); else project.records.push(next); saveState(); closeSheet(); render(); toast(record ? "记录已修改，余额已重算" : `已记录 ${next.name} ${money(next.amount)}`); };
+  if (record) document.querySelector("[data-delete]").onclick = () => { if (confirm("确定删除这笔记录吗？金额会加回余额。")) { project.records = project.records.filter(item => item.id !== record.id); saveState(); closeSheet(); render(); toast("记录已删除，金额已加回"); } };
+  setTimeout(() => nameInput.focus(), 100);
+}
+
+function openTypeSheet(oldType = "") {
+  sheet(oldType ? "编辑消费类型" : "新增消费类型", `<form id="type-form"><label class="field"><span>类型名称</span><input name="name" required maxlength="12" value="${escapeHtml(oldType)}" placeholder="例如：宠物"></label><div class="sheet-actions">${oldType ? `<button class="danger" type="button" data-delete>删除</button>` : ""}<button class="primary" type="submit">保存</button></div></form>`);
+  const form = document.querySelector("#type-form"); form.onsubmit = event => { event.preventDefault(); const name = new FormData(form).get("name").trim(); if (!oldType && state.types.includes(name)) return toast("这个类型已经存在"); if (oldType) { state.types = state.types.map(item => item === oldType ? name : item); state.presets.forEach(item => { if (item.type === oldType) item.type = name; }); state.projects.forEach(project => { project.records.forEach(item => { if (item.type === oldType) item.type = name; }); if (project.filterType === oldType) project.filterType = name; }); } else state.types.push(name); saveState(); closeSheet(); render(); };
+  if (oldType) document.querySelector("[data-delete]").onclick = () => { if (confirm(`删除“${oldType}”类型吗？已有记录会变为未分类。`)) { state.types = state.types.filter(item => item !== oldType); state.presets.forEach(item => { if (item.type === oldType) item.type = ""; }); state.projects.forEach(project => { project.records.forEach(item => { if (item.type === oldType) item.type = ""; }); if (project.filterType === oldType) project.filterType = "all"; }); saveState(); closeSheet(); render(); } };
+}
+
+function openPresetSheet(presetId = null) {
+  const preset = state.presets.find(item => item.id === presetId);
+  sheet(preset ? "编辑常用名称" : "新增常用名称", `<form id="preset-form"><label class="field"><span>常用消费名称</span><input name="name" required maxlength="30" value="${escapeHtml(preset?.name || "")}" placeholder="例如：奶茶"></label><label class="field"><span>识别关键词（用逗号分隔）</span><input class="keyword-box" name="keywords" value="${escapeHtml(preset?.keywords.join("，") || "")}" placeholder="奶茶，霸王茶姬，喜茶"></label><label class="field"><span>关联消费类型（可不选）</span><select name="type">${typeOptions(preset?.type || "")}</select></label><div class="sheet-actions">${preset ? `<button class="danger" type="button" data-delete>删除</button>` : ""}<button class="primary" type="submit">保存</button></div></form>`);
+  const form = document.querySelector("#preset-form"); form.onsubmit = event => { event.preventDefault(); const data = new FormData(form); const next = { id: preset?.id || uid(), name: data.get("name").trim(), keywords: data.get("keywords").split(/[，,]/).map(item => item.trim()).filter(Boolean), type: data.get("type") }; if (preset) Object.assign(preset, next); else state.presets.push(next); saveState(); closeSheet(); render(); toast("预设已保存"); };
+  if (preset) document.querySelector("[data-delete]").onclick = () => { state.presets = state.presets.filter(item => item.id !== preset.id); saveState(); closeSheet(); render(); };
+}
+
+function exportData() {
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = `余下备份-${today()}.json`; link.click(); URL.revokeObjectURL(url); toast("备份已导出");
+}
+
+document.querySelector("#import-file").addEventListener("change", async event => {
+  const file = event.target.files[0];
+  if (!file) return;
+  try {
+    const imported = normalizeState(JSON.parse(await file.text()));
+    if (!confirm("导入备份会覆盖当前全部数据，确定继续吗？")) return;
+    state = imported;
+    saveState();
+    navigate("home");
+    toast("备份已恢复");
+  } catch {
+    toast("无法读取这个备份文件");
+  } finally {
+    event.target.value = "";
+  }
+});
+
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js");
+render();
