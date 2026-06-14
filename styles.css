@@ -76,12 +76,12 @@ button { color: inherit; }
 .compact-empty { padding: 34px 20px; }
 
 .record-list { background: var(--surface); border-radius: 24px; padding: 3px 18px; box-shadow: var(--shadow); }
-.record { width: 100%; border: 0; border-bottom: 1px solid var(--line); background: transparent; display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; text-align: left; padding: 16px 0; }
+.record { width: 100%; border: 0; border-bottom: 1px solid var(--line); background: transparent; display: grid; grid-template-columns: minmax(0, 1fr) 128px; gap: 6px 12px; text-align: left; padding: 16px 0; }
 .record:last-child { border-bottom: 0; }
-.record-name { font-weight: 600; }
-.record-amount { font-family: "Avenir Next", sans-serif; font-weight: 650; }
+.record-name { min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.record-amount { width: 100%; font-family: "Avenir Next", sans-serif; font-weight: 650; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 .record-meta { color: var(--muted); font-size: 12px; }
-.record-original { text-align: right; min-height: 14px; }
+.record-original { width: 100%; text-align: right; min-height: 14px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 .daily-card { background: var(--surface); border-radius: 24px; padding: 18px 10px 13px; box-shadow: var(--shadow); overflow: hidden; }
 .daily-scroll { overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; touch-action: pan-x pan-y; cursor: grab; }
