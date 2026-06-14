@@ -37,10 +37,19 @@ button { color: inherit; }
 .project-card-top { display: flex; justify-content: space-between; gap: 16px; align-items: start; }
 .project-card h2 { font-size: 19px; margin: 0 0 6px; }
 .project-card .balance { font-family: "Avenir Next", sans-serif; font-size: 25px; font-weight: 650; color: var(--sage-deep); white-space: nowrap; }
+.project-currency { color: var(--muted); font-size: 11px; margin-top: 12px; }
 .subtle { color: var(--muted); font-size: 13px; }
 .progress { height: 7px; background: #eee9df; border-radius: 99px; margin-top: 18px; overflow: hidden; }
 .progress span { display: block; height: 100%; background: var(--sage-deep); border-radius: inherit; }
 .empty { text-align: center; color: var(--muted); padding: 70px 30px; line-height: 1.8; }
+.archive-entry { width: 100%; border: 0; background: transparent; color: var(--muted); display: flex; justify-content: space-between; padding: 18px 8px; margin-top: 10px; text-align: left; }
+.archive-entry span { color: var(--sage-deep); }
+.page-note { color: var(--muted); font-size: 13px; line-height: 1.6; margin: -7px 2px 18px; }
+.archived-card { background: var(--surface); border-radius: 20px; box-shadow: var(--shadow); display: grid; grid-template-columns: 1fr auto; align-items: stretch; overflow: hidden; }
+.archived-card > button { border: 0; background: transparent; padding: 17px 18px; text-align: left; display: flex; justify-content: space-between; align-items: center; }
+.archived-card strong, .archived-card small { display: block; }
+.archived-card small { color: var(--muted); margin-top: 5px; }
+.archived-card .restore-button { color: var(--sage-deep); border-left: 1px solid var(--line); font-weight: 650; }
 
 .balance-card { background: var(--sage); border-radius: 28px; padding: 24px; margin-bottom: 18px; }
 .balance-card .label { color: #667064; font-size: 14px; }
@@ -72,6 +81,7 @@ button { color: inherit; }
 .record-name { font-weight: 600; }
 .record-amount { font-family: "Avenir Next", sans-serif; font-weight: 650; }
 .record-meta { color: var(--muted); font-size: 12px; }
+.record-original { text-align: right; min-height: 14px; }
 
 .daily-card { background: var(--surface); border-radius: 24px; padding: 18px 10px 13px; box-shadow: var(--shadow); overflow: hidden; }
 .daily-scroll { overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; touch-action: pan-x pan-y; cursor: grab; }
@@ -109,6 +119,13 @@ button { color: inherit; }
 .field input, .field select { width: 100%; min-height: 50px; border: 1px solid var(--line); background: white; border-radius: 15px; padding: 0 14px; outline: none; }
 .field input:focus, .field select:focus { border-color: #899886; box-shadow: 0 0 0 3px rgba(137,152,134,.14); }
 .helper { color: var(--sage-deep); font-size: 12px; margin: -9px 0 17px 3px; }
+.amount-grid { display: grid; grid-template-columns: 1fr 1.25fr; gap: 10px; }
+.project-actions { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 10px; display: grid; }
+.project-actions button { border: 0; border-bottom: 1px solid var(--line); background: transparent; padding: 15px 3px; text-align: left; font-weight: 650; }
+.project-actions button:last-child { border-bottom: 0; }
+.project-actions small { display: block; color: var(--muted); font-weight: 400; margin-top: 4px; }
+.project-actions .delete-action { color: var(--danger); }
+.project-actions .secondary-action { color: var(--sage-deep); }
 .sheet-actions { display: flex; gap: 10px; margin-top: 24px; }
 .sheet-actions button { min-height: 52px; }
 .danger { border: 0; color: var(--danger); background: #f4e5e1; border-radius: 16px; padding: 0 18px; }
