@@ -166,7 +166,7 @@ function archiveView() {
     <header class="topbar"><button class="back-button" data-action="home">‹ 返回</button><h1 style="font-size:24px">已归档项目</h1><span style="width:42px"></span></header>
     <p class="page-note">归档只会从首页隐藏项目，账目仍然完整保留。</p>
     <section class="project-list archived-list">
-      ${projects.length ? projects.map(project => `<div class="archived-card"><button data-project="${project.id}"><span><strong>${escapeHtml(project.name)}</strong><small>${projectMoney(project, remaining(project))} 剩余</small></span><span>›</span></button><button class="restore-button" data-restore="${project.id}">恢复</button></div>`).join("") : `<div class="empty">还没有归档项目。</div>`}
+      ${projects.length ? projects.map(project => `<div class="archived-card"><button data-project="${project.id}"><span><strong>${escapeHtml(project.name)}</strong><small>${projectMoney(project, remaining(project))} 剩余</small><small>创建于 ${formatDate(project.createdAt || today())}</small></span><span>›</span></button><button class="restore-button" data-restore="${project.id}">恢复</button></div>`).join("") : `<div class="empty">还没有归档项目。</div>`}
     </section>
   </main>`;
 }

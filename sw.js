@@ -1,5 +1,5 @@
-const CACHE = "yuxia-v12";
-const ASSETS = ["./", "index.html", "styles.css?v=12", "app.js?v=12", "manifest.webmanifest", "icon.svg", "icons/apple-touch-icon.png", "icons/icon-192.png", "icons/icon-512.png", "icons/icon-maskable-512.png"];
+const CACHE = "yuxia-v13";
+const ASSETS = ["./", "index.html", "styles.css?v=13", "app.js?v=13", "manifest.webmanifest?v=13", "icon.svg", "icons/apple-touch-icon.png?v=13", "icons/icon-192.png?v=13", "icons/icon-512.png?v=13", "icons/icon-maskable-512.png?v=13"];
 self.addEventListener("install", event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting())));
 self.addEventListener("activate", event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key)))).then(() => self.clients.claim())));
 self.addEventListener("fetch", event => {
