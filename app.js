@@ -4,13 +4,9 @@ const uid = () => crypto.randomUUID();
 const currencies = {
   CNY: { label: "人民币", symbol: "¥" },
   IDR: { label: "印尼盾", symbol: "Rp" },
-  USD: { label: "美元", symbol: "$" },
-  EUR: { label: "欧元", symbol: "€" },
-  JPY: { label: "日元", symbol: "¥" },
-  HKD: { label: "港币", symbol: "HK$" },
-  SGD: { label: "新加坡元", symbol: "S$" },
-  THB: { label: "泰铢", symbol: "฿" }
+  USD: { label: "美元", symbol: "$" }
 };
+const defaultRates = { CNY: 1, USD: 6.81, IDR: 0.000376 };
 const money = (value, currency = "CNY") => new Intl.NumberFormat("zh-CN", {
   style: "currency",
   currency: currencies[currency] ? currency : "CNY",
@@ -32,20 +28,33 @@ let state = loadState();
 let route = { page: "home", projectId: null };
 
 function loadState() {
-  try { return normalizeState(JSON.parse(localStorage.getItem(STORAGE_KEY)) || structuredClone(defaultState)); }
+  try {
+    const normalized = normalizeState(JSON.parse(localStorage.getItem(STORAGE_KEY)) || structuredClone(defaultState));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+    return normalized;
+  }
   catch { return structuredClone(defaultState); }
 }
 function normalizeState(value) {
   if (!value || !Array.isArray(value.projects) || !Array.isArray(value.types) || !Array.isArray(value.presets)) throw new Error("Invalid data");
   value.projects.forEach(project => {
     if (!project.id || typeof project.name !== "string" || !Number.isFinite(Number(project.total)) || !Array.isArray(project.records)) throw new Error("Invalid project");
-    project.currency = currencies[project.currency] ? project.currency : "CNY";
+    const oldProjectCurrency = project.currency || "CNY";
+    const baseRate = defaultRates[oldProjectCurrency] || 1;
+    if (oldProjectCurrency !== "CNY" && !project.convertedToCny) {
+      project.total = Number(project.total) * baseRate;
+      project.records.forEach(record => { record.amount = Number(record.amount) * baseRate; });
+      project.convertedToCny = true;
+    }
+    project.currency = "CNY";
     project.archived = Boolean(project.archived);
-    project.rates = project.rates && typeof project.rates === "object" ? project.rates : {};
     project.records.forEach(record => {
       if (!record.id || typeof record.name !== "string" || !Number.isFinite(Number(record.amount)) || typeof record.date !== "string") throw new Error("Invalid record");
-      record.currency = currencies[record.currency] ? record.currency : project.currency;
-      record.originalAmount = Number.isFinite(Number(record.originalAmount)) ? Number(record.originalAmount) : Number(record.amount);
+      const supportedCurrency = currencies[record.currency] ? record.currency : "CNY";
+      record.originalAmount = supportedCurrency === "CNY"
+        ? Number(record.amount)
+        : Number.isFinite(Number(record.originalAmount)) ? Number(record.originalAmount) : Number(record.amount);
+      record.currency = supportedCurrency;
       record.paymentMethod = typeof record.paymentMethod === "string" ? record.paymentMethod : "";
     });
   });
@@ -59,7 +68,7 @@ function formatDate(value) { return new Intl.DateTimeFormat("zh-CN", { month: "s
 function currencyOptions(selected = "CNY") { return Object.entries(currencies).map(([code, item]) => `<option value="${code}" ${code === selected ? "selected" : ""}>${item.label} · ${code}</option>`).join(""); }
 function originalMoney(record, project) { return money(record.originalAmount ?? record.amount, record.currency || project.currency); }
 function rateHint(currency, rate, baseCurrency) {
-  const unit = currency === "IDR" ? 100000 : currency === "JPY" ? 100 : 1;
+  const unit = currency === "IDR" ? 100000 : 1;
   return `${currency} ${new Intl.NumberFormat("zh-CN").format(unit)} ≈ ${money(rate * unit, baseCurrency)}`;
 }
 
@@ -258,16 +267,15 @@ function openFilterSheet() {
 
 function openProjectSheet(projectId = null) {
   const project = state.projects.find(item => item.id === projectId);
-  sheet(project ? "项目设置" : "新增项目", `<form id="project-form"><label class="field"><span>项目名称</span><input name="name" required maxlength="30" value="${escapeHtml(project?.name || "")}" placeholder="例如：巴厘岛旅行"></label><label class="field"><span>统计币种</span><select name="currency" ${project?.records.length ? "disabled" : ""}>${currencyOptions(project?.currency || "CNY")}</select></label>${project?.records.length ? `<div class="helper">已有消费记录后不可更换统计币种</div>` : `<div class="helper">项目余额、分类和图表都用这个币种统计</div>`}<label class="field"><span>总金额</span><input name="total" required type="number" min="0" step="0.01" inputmode="decimal" value="${project?.total ?? ""}" placeholder="0"></label>${project ? `<section class="project-actions"><button class="secondary-action" type="button" data-archive>${project.archived ? "恢复到首页" : "归档项目"}<small>${project.archived ? "重新显示在首页" : "从首页隐藏，保留全部账目"}</small></button><button class="delete-action" type="button" data-delete>永久删除<small>同时删除项目内全部消费记录</small></button></section>` : ""}<div class="sheet-actions"><button class="primary" type="submit">保存</button></div></form>`);
+  sheet(project ? "项目设置" : "新增项目", `<form id="project-form"><label class="field"><span>项目名称</span><input name="name" required maxlength="30" value="${escapeHtml(project?.name || "")}" placeholder="例如：巴厘岛旅行"></label><label class="field"><span>总金额（人民币）</span><input name="total" required type="number" min="0" step="0.01" inputmode="decimal" value="${project?.total ?? ""}" placeholder="¥ 0"></label><div class="helper">所有项目统一使用人民币计算余额和统计</div>${project ? `<section class="project-actions"><button class="secondary-action" type="button" data-archive>${project.archived ? "恢复到首页" : "归档项目"}<small>${project.archived ? "重新显示在首页" : "从首页隐藏，保留全部账目"}</small></button><button class="delete-action" type="button" data-delete>永久删除<small>同时删除项目内全部消费记录</small></button></section>` : ""}<div class="sheet-actions"><button class="primary" type="submit">保存</button></div></form>`);
   document.querySelector("#project-form").onsubmit = event => {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
     if (project) {
       project.name = data.get("name").trim();
       project.total = Number(data.get("total"));
-      if (!project.records.length) project.currency = data.get("currency");
     } else {
-      state.projects.push({ id: uid(), name: data.get("name").trim(), total: Number(data.get("total")), currency: data.get("currency"), createdAt: today(), archived: false, rates: {}, records: [] });
+      state.projects.push({ id: uid(), name: data.get("name").trim(), total: Number(data.get("total")), currency: "CNY", createdAt: today(), archived: false, records: [] });
     }
     saveState();
     closeSheet();
@@ -331,9 +339,9 @@ function openRecordSheet(recordId = null) {
       rateHelper.textContent = "";
       return;
     }
-    const rate = Number(project.rates[currency]);
+    const rate = defaultRates[currency];
     if (!amountWasEdited && rate && originalInput.value) amountInput.value = (Number(originalInput.value) * rate).toFixed(2).replace(/\.00$/, "");
-    rateHelper.textContent = rate ? `已按上次参考汇率估算：${rateHint(currency, rate, project.currency)}，可修改` : `请填写实际折合的 ${project.currency} 金额，本项目会记住这次汇率`;
+    rateHelper.textContent = `按固定参考汇率估算：${rateHint(currency, rate, project.currency)}，可修改`;
   };
   currencySelect.onchange = () => { amountWasEdited = false; updateConversion(); };
   originalInput.oninput = updateConversion;
@@ -346,7 +354,6 @@ function openRecordSheet(recordId = null) {
     const original = Number(data.get("originalAmount"));
     const converted = currency === project.currency ? original : Number(data.get("amount"));
     const next = { id: record?.id || uid(), name: data.get("name").trim(), type: data.get("type"), currency, originalAmount: original, amount: converted, paymentMethod: data.get("paymentMethod"), date: data.get("date") };
-    if (currency !== project.currency && original > 0) project.rates[currency] = converted / original;
     if (record) Object.assign(record, next); else project.records.push(next);
     saveState();
     closeSheet();
