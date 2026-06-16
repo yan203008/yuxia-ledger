@@ -236,8 +236,8 @@ function bindPageEvents() {
   });
 }
 
-function sheet(title, fields, actions = "") {
-  document.querySelector("#sheet-root").innerHTML = `<div class="sheet-backdrop"><section class="sheet" role="dialog" aria-modal="true"><div class="grabber"></div><div class="sheet-head"><h2>${title}</h2><button class="close" data-close>×</button></div>${fields}${actions}</section></div>`;
+function sheet(title, fields, actions = "", className = "") {
+  document.querySelector("#sheet-root").innerHTML = `<div class="sheet-backdrop ${className ? `${className}-backdrop` : ""}"><section class="sheet ${className}" role="dialog" aria-modal="true"><div class="grabber"></div><div class="sheet-head"><h2>${title}</h2><button class="close" data-close>×</button></div>${fields}${actions}</section></div>`;
   document.querySelector("[data-close]").onclick = closeSheet;
   document.querySelector(".sheet-backdrop").onclick = event => { if (event.target.classList.contains("sheet-backdrop")) closeSheet(); };
 }
@@ -306,7 +306,7 @@ function openProjectSheet(projectId = null) {
 }
 
 function openConverterSheet() {
-  sheet("货币换算", `<form id="converter-form"><div class="converter-lines"><label class="converter-line"><span data-from-label>印尼盾 · IDR</span><input name="amount" type="number" min="0" step="0.01" inputmode="decimal" placeholder="输入金额"></label><div class="converter-line"><span data-to-label>人民币 · CNY</span><strong data-converter-result>¥0</strong></div></div><small class="converter-rate" data-converter-rate></small><button class="text-button converter-settings-toggle" type="button" data-settings-toggle>设置货币</button><div class="converter-settings" data-converter-settings hidden><label class="field"><span>从</span><select name="from">${currencyOptions("IDR")}</select></label><label class="field"><span>换算到</span><select name="to">${currencyOptions("CNY")}</select></label><button class="secondary swap-button" type="button" data-swap>对调</button></div></form>`);
+  sheet("货币换算", `<form id="converter-form"><div class="converter-lines"><label class="converter-line"><span data-from-label>印尼盾 · IDR</span><input name="amount" type="number" min="0" step="0.01" inputmode="decimal" placeholder="输入金额"></label><div class="converter-line"><span data-to-label>人民币 · CNY</span><strong data-converter-result>¥0</strong></div></div><small class="converter-rate" data-converter-rate></small><button class="converter-settings-toggle" type="button" data-settings-toggle>设置货币</button><div class="converter-settings" data-converter-settings hidden><label class="field"><span>从</span><select name="from">${currencyOptions("IDR")}</select></label><label class="field"><span>换算到</span><select name="to">${currencyOptions("CNY")}</select></label><button class="secondary swap-button" type="button" data-swap>对调</button></div></form>`, "", "converter-sheet");
   const form = document.querySelector("#converter-form");
   const amountInput = form.elements.amount;
   const fromSelect = form.elements.from;
