@@ -120,6 +120,10 @@ button { color: inherit; }
 .field input:focus, .field select:focus { border-color: #899886; box-shadow: 0 0 0 3px rgba(137,152,134,.14); }
 .helper { color: var(--sage-deep); font-size: 12px; margin: -9px 0 17px 3px; }
 .amount-grid { display: grid; grid-template-columns: 1fr 1.25fr; gap: 10px; }
+.swap-button { min-height: 50px; align-self: end; }
+.converter-result { background: var(--sage); border-radius: 22px; padding: 18px; display: grid; gap: 5px; }
+.converter-result span, .converter-result small { color: var(--sage-deep); font-size: 12px; }
+.converter-result strong { font-family: "Avenir Next", sans-serif; font-size: 30px; font-weight: 650; font-variant-numeric: tabular-nums; }
 .project-actions { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 10px; display: grid; }
 .project-actions button { border: 0; border-bottom: 1px solid var(--line); background: transparent; padding: 15px 3px; text-align: left; font-weight: 650; }
 .project-actions button:last-child { border-bottom: 0; }

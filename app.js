@@ -47,6 +47,7 @@ function normalizeState(value) {
       project.convertedToCny = true;
     }
     project.currency = "CNY";
+    project.defaultCurrency = currencies[project.defaultCurrency] ? project.defaultCurrency : "IDR";
     project.archived = Boolean(project.archived);
     project.records.forEach(record => {
       if (!record.id || typeof record.name !== "string" || !Number.isFinite(Number(record.amount)) || typeof record.date !== "string") throw new Error("Invalid record");
@@ -67,6 +68,7 @@ function escapeHtml(value = "") { return String(value).replace(/[&<>"]/g, char =
 function formatDate(value) { return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" }).format(new Date(`${value}T12:00:00`)); }
 function currencyOptions(selected = "CNY") { return Object.entries(currencies).map(([code, item]) => `<option value="${code}" ${code === selected ? "selected" : ""}>${item.label} · ${code}</option>`).join(""); }
 function originalMoney(record, project) { return money(record.originalAmount ?? record.amount, record.currency || project.currency); }
+function convertCurrency(amount, from, to) { return Number(amount || 0) * defaultRates[from] / defaultRates[to]; }
 function rateHint(currency, rate, baseCurrency) {
   const unit = currency === "IDR" ? 100000 : 1;
   return `${currency} ${new Intl.NumberFormat("zh-CN").format(unit)} ≈ ${money(rate * unit, baseCurrency)}`;
@@ -156,7 +158,7 @@ function homeView() {
       }).join("") : `<div class="empty">还没有资金项目。<br>建立第一个项目后就可以开始记账。</div>`}
     </section>
     ${archivedCount ? `<button class="archive-entry" data-action="archive">已归档项目 <span>${archivedCount} ›</span></button>` : ""}
-    <div class="fab-bar"><button class="primary" data-action="new-project">＋ 新增项目</button></div>
+    <div class="fab-bar"><button class="secondary" data-action="convert">换算</button><button class="primary" data-action="new-project">＋ 新增项目</button></div>
   </main>`;
 }
 
@@ -221,6 +223,7 @@ function bindPageEvents() {
     if (action === "settings") el.onclick = () => navigate("settings");
     if (action === "home") el.onclick = () => navigate("home");
     if (action === "archive") el.onclick = () => navigate("archive");
+    if (action === "convert") el.onclick = () => openConverterSheet();
     if (action === "new-project") el.onclick = () => openProjectSheet();
     if (action === "edit-project") el.onclick = () => openProjectSheet(route.projectId);
     if (action === "new-record") el.onclick = () => openRecordSheet();
@@ -267,15 +270,16 @@ function openFilterSheet() {
 
 function openProjectSheet(projectId = null) {
   const project = state.projects.find(item => item.id === projectId);
-  sheet(project ? "项目设置" : "新增项目", `<form id="project-form"><label class="field"><span>项目名称</span><input name="name" required maxlength="30" value="${escapeHtml(project?.name || "")}" placeholder="例如：巴厘岛旅行"></label><label class="field"><span>总金额（人民币）</span><input name="total" required type="number" min="0" step="0.01" inputmode="decimal" value="${project?.total ?? ""}" placeholder="¥ 0"></label><div class="helper">所有项目统一使用人民币计算余额和统计</div>${project ? `<section class="project-actions"><button class="secondary-action" type="button" data-archive>${project.archived ? "恢复到首页" : "归档项目"}<small>${project.archived ? "重新显示在首页" : "从首页隐藏，保留全部账目"}</small></button><button class="delete-action" type="button" data-delete>永久删除<small>同时删除项目内全部消费记录</small></button></section>` : ""}<div class="sheet-actions"><button class="primary" type="submit">保存</button></div></form>`);
+  sheet(project ? "项目设置" : "新增项目", `<form id="project-form"><label class="field"><span>项目名称</span><input name="name" required maxlength="30" value="${escapeHtml(project?.name || "")}" placeholder="例如：巴厘岛旅行"></label><label class="field"><span>总金额（人民币）</span><input name="total" required type="number" min="0" step="0.01" inputmode="decimal" value="${project?.total ?? ""}" placeholder="¥ 0"></label><div class="helper">所有项目统一使用人民币计算余额和统计</div><label class="field"><span>默认支付币种</span><select name="defaultCurrency">${currencyOptions(project?.defaultCurrency || "IDR")}</select></label><div class="helper">以后记一笔时会默认选中这个币种，仍可临时修改</div>${project ? `<section class="project-actions"><button class="secondary-action" type="button" data-archive>${project.archived ? "恢复到首页" : "归档项目"}<small>${project.archived ? "重新显示在首页" : "从首页隐藏，保留全部账目"}</small></button><button class="delete-action" type="button" data-delete>永久删除<small>同时删除项目内全部消费记录</small></button></section>` : ""}<div class="sheet-actions"><button class="primary" type="submit">保存</button></div></form>`);
   document.querySelector("#project-form").onsubmit = event => {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
     if (project) {
       project.name = data.get("name").trim();
       project.total = Number(data.get("total"));
+      project.defaultCurrency = data.get("defaultCurrency");
     } else {
-      state.projects.push({ id: uid(), name: data.get("name").trim(), total: Number(data.get("total")), currency: "CNY", createdAt: today(), archived: false, records: [] });
+      state.projects.push({ id: uid(), name: data.get("name").trim(), total: Number(data.get("total")), currency: "CNY", defaultCurrency: data.get("defaultCurrency"), createdAt: today(), archived: false, records: [] });
     }
     saveState();
     closeSheet();
@@ -301,6 +305,32 @@ function openProjectSheet(projectId = null) {
   }
 }
 
+function openConverterSheet() {
+  sheet("货币换算", `<form id="converter-form"><div class="amount-grid"><label class="field"><span>金额</span><input name="amount" type="number" min="0" step="0.01" inputmode="decimal" value="100000" placeholder="0"></label><label class="field"><span>从</span><select name="from">${currencyOptions("IDR")}</select></label></div><div class="amount-grid"><label class="field"><span>换算到</span><select name="to">${currencyOptions("CNY")}</select></label><button class="secondary swap-button" type="button" data-swap>对调</button></div><section class="converter-result"><span>约等于</span><strong data-converter-result></strong><small data-converter-rate></small></section></form>`);
+  const form = document.querySelector("#converter-form");
+  const amountInput = form.elements.amount;
+  const fromSelect = form.elements.from;
+  const toSelect = form.elements.to;
+  const result = form.querySelector("[data-converter-result]");
+  const rate = form.querySelector("[data-converter-rate]");
+  const update = () => {
+    const converted = convertCurrency(Number(amountInput.value), fromSelect.value, toSelect.value);
+    result.textContent = money(converted, toSelect.value);
+    rate.textContent = `${rateHint(fromSelect.value, defaultRates[fromSelect.value] / defaultRates[toSelect.value], toSelect.value)} · 固定参考汇率`;
+  };
+  amountInput.oninput = update;
+  fromSelect.onchange = update;
+  toSelect.onchange = update;
+  form.querySelector("[data-swap]").onclick = () => {
+    const from = fromSelect.value;
+    fromSelect.value = toSelect.value;
+    toSelect.value = from;
+    update();
+  };
+  update();
+  setTimeout(() => amountInput.focus(), 100);
+}
+
 function findMatchedType(name) {
   const query = name.trim().toLowerCase();
   if (!query) return "";
@@ -313,7 +343,7 @@ function typeOptions(selected = "") { return `<option value="">不选择</option
 function openRecordSheet(recordId = null) {
   const project = state.projects.find(item => item.id === route.projectId);
   const record = project.records.find(item => item.id === recordId);
-  const recordCurrency = record?.currency || project.currency;
+  const recordCurrency = record?.currency || project.defaultCurrency || "IDR";
   const convertedAmount = record?.amount ?? "";
   const originalAmount = record?.originalAmount ?? record?.amount ?? "";
   sheet(record ? "编辑记录" : "记一笔", `<form id="record-form"><label class="field"><span>消费名称</span><input name="name" required maxlength="40" autocomplete="off" value="${escapeHtml(record?.name || "")}" placeholder="例如：巴厘岛晚餐"></label><label class="field"><span>消费类型</span><select name="type">${typeOptions(record?.type || "")}</select></label><div class="helper" data-match-helper>${record?.type ? "可以手动修改" : "匹配到预设时会自动填写，也可以留空"}</div><div class="amount-grid"><label class="field"><span>支付币种</span><select name="currency">${currencyOptions(recordCurrency)}</select></label><label class="field"><span>原始金额</span><input name="originalAmount" required type="number" min="0.01" step="0.01" inputmode="decimal" value="${originalAmount}" placeholder="0"></label></div><div data-conversion><label class="field"><span>折合 ${currencies[project.currency].label}（${project.currency}）</span><input name="amount" required type="number" min="0.01" step="0.01" inputmode="decimal" value="${convertedAmount}" placeholder="0"></label><div class="helper" data-rate-helper></div></div><label class="field"><span>支付方式（可不选）</span><select name="paymentMethod"><option value="">不选择</option>${["现金", "Visa", "Mastercard", "支付宝", "微信", "其他"].map(item => `<option value="${item}" ${record?.paymentMethod === item ? "selected" : ""}>${item}</option>`).join("")}</select></label><label class="field"><span>日期</span><input name="date" required type="date" value="${record?.date || today()}"></label><div class="helper">默认记录创建当天，可修改</div><div class="sheet-actions">${record ? `<button class="danger" type="button" data-delete>删除</button>` : ""}<button class="primary" type="submit">保存并扣减</button></div></form>`);
