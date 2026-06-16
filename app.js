@@ -306,21 +306,29 @@ function openProjectSheet(projectId = null) {
 }
 
 function openConverterSheet() {
-  sheet("货币换算", `<form id="converter-form"><div class="amount-grid"><label class="field"><span>金额</span><input name="amount" type="number" min="0" step="0.01" inputmode="decimal" value="100000" placeholder="0"></label><label class="field"><span>从</span><select name="from">${currencyOptions("IDR")}</select></label></div><div class="amount-grid"><label class="field"><span>换算到</span><select name="to">${currencyOptions("CNY")}</select></label><button class="secondary swap-button" type="button" data-swap>对调</button></div><section class="converter-result"><span>约等于</span><strong data-converter-result></strong><small data-converter-rate></small></section></form>`);
+  sheet("货币换算", `<form id="converter-form"><div class="converter-lines"><label class="converter-line"><span data-from-label>印尼盾 · IDR</span><input name="amount" type="number" min="0" step="0.01" inputmode="decimal" placeholder="输入金额"></label><div class="converter-line"><span data-to-label>人民币 · CNY</span><strong data-converter-result>¥0</strong></div></div><small class="converter-rate" data-converter-rate></small><button class="text-button converter-settings-toggle" type="button" data-settings-toggle>设置货币</button><div class="converter-settings" data-converter-settings hidden><label class="field"><span>从</span><select name="from">${currencyOptions("IDR")}</select></label><label class="field"><span>换算到</span><select name="to">${currencyOptions("CNY")}</select></label><button class="secondary swap-button" type="button" data-swap>对调</button></div></form>`);
   const form = document.querySelector("#converter-form");
   const amountInput = form.elements.amount;
   const fromSelect = form.elements.from;
   const toSelect = form.elements.to;
   const result = form.querySelector("[data-converter-result]");
   const rate = form.querySelector("[data-converter-rate]");
+  const fromLabel = form.querySelector("[data-from-label]");
+  const toLabel = form.querySelector("[data-to-label]");
+  const settings = form.querySelector("[data-converter-settings]");
   const update = () => {
     const converted = convertCurrency(Number(amountInput.value), fromSelect.value, toSelect.value);
-    result.textContent = money(converted, toSelect.value);
+    fromLabel.textContent = `${currencies[fromSelect.value].label} · ${fromSelect.value}`;
+    toLabel.textContent = `${currencies[toSelect.value].label} · ${toSelect.value}`;
+    result.textContent = amountInput.value ? money(converted, toSelect.value) : money(0, toSelect.value);
     rate.textContent = `${rateHint(fromSelect.value, defaultRates[fromSelect.value] / defaultRates[toSelect.value], toSelect.value)} · 固定参考汇率`;
   };
   amountInput.oninput = update;
   fromSelect.onchange = update;
   toSelect.onchange = update;
+  form.querySelector("[data-settings-toggle]").onclick = () => {
+    settings.hidden = !settings.hidden;
+  };
   form.querySelector("[data-swap]").onclick = () => {
     const from = fromSelect.value;
     fromSelect.value = toSelect.value;

@@ -121,9 +121,16 @@ button { color: inherit; }
 .helper { color: var(--sage-deep); font-size: 12px; margin: -9px 0 17px 3px; }
 .amount-grid { display: grid; grid-template-columns: 1fr 1.25fr; gap: 10px; }
 .swap-button { min-height: 50px; align-self: end; }
-.converter-result { background: var(--sage); border-radius: 22px; padding: 18px; display: grid; gap: 5px; }
-.converter-result span, .converter-result small { color: var(--sage-deep); font-size: 12px; }
-.converter-result strong { font-family: "Avenir Next", sans-serif; font-size: 30px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.converter-lines { display: grid; gap: 12px; }
+.converter-line { display: grid; grid-template-columns: 112px minmax(0, 1fr); align-items: center; gap: 12px; }
+.converter-line > span { color: var(--muted); font-size: 14px; font-weight: 650; }
+.converter-line input, .converter-line strong { width: 100%; min-height: 64px; border: 0; border-radius: 20px; background: var(--sage); color: var(--ink); padding: 0 18px; font-family: "Avenir Next", sans-serif; font-size: 30px; font-weight: 650; font-variant-numeric: tabular-nums; display: flex; align-items: center; }
+.converter-line input:focus { outline: 0; box-shadow: 0 0 0 3px rgba(137,152,134,.22); }
+.converter-rate { display: block; color: var(--sage-deep); font-size: 12px; margin: 12px 0 4px 124px; }
+.converter-settings-toggle { width: 100%; margin-top: 12px; text-align: center; }
+.converter-settings { margin-top: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.converter-settings[hidden] { display: none; }
+.converter-settings .swap-button { grid-column: 1 / -1; }
 .project-actions { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 10px; display: grid; }
 .project-actions button { border: 0; border-bottom: 1px solid var(--line); background: transparent; padding: 15px 3px; text-align: left; font-weight: 650; }
 .project-actions button:last-child { border-bottom: 0; }
