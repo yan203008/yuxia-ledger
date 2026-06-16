@@ -1,6 +1,7 @@
 const STORAGE_KEY = "yuxia-ledger-v1";
 const today = () => new Date().toLocaleDateString("sv-SE");
 const uid = () => crypto.randomUUID();
+const nowIso = () => new Date().toISOString();
 const currencies = {
   CNY: { label: "人民币", symbol: "¥" },
   IDR: { label: "印尼盾", symbol: "Rp" },
@@ -57,6 +58,8 @@ function normalizeState(value) {
         : Number.isFinite(Number(record.originalAmount)) ? Number(record.originalAmount) : Number(record.amount);
       record.currency = supportedCurrency;
       record.paymentMethod = typeof record.paymentMethod === "string" ? record.paymentMethod : "";
+      record.createdAt = typeof record.createdAt === "string" ? record.createdAt : `${record.date}T12:00:00.000`;
+      record.updatedAt = typeof record.updatedAt === "string" ? record.updatedAt : record.createdAt;
     });
   });
   return value;
@@ -92,10 +95,12 @@ const sortOptions = {
 function sortedRecords(project, records = project.records) {
   const mode = project.sortMode || "date-desc";
   return [...records].sort((a, b) => {
-    if (mode === "date-asc") return a.date.localeCompare(b.date);
+    const newest = `${b.date}T${b.createdAt || ""}`.localeCompare(`${a.date}T${a.createdAt || ""}`);
+    const oldest = `${a.date}T${a.createdAt || ""}`.localeCompare(`${b.date}T${b.createdAt || ""}`);
+    if (mode === "date-asc") return oldest;
     if (mode === "amount-desc") return Number(b.amount) - Number(a.amount);
     if (mode === "amount-asc") return Number(a.amount) - Number(b.amount);
-    return b.date.localeCompare(a.date);
+    return newest;
   });
 }
 
@@ -405,7 +410,7 @@ function openRecordSheet(recordId = null) {
     const currency = data.get("currency");
     const original = parseAmountText(data.get("originalAmount"));
     const converted = currency === project.currency ? original : Number(data.get("amount"));
-    const next = { id: record?.id || uid(), name: data.get("name").trim(), type: data.get("type"), currency, originalAmount: original, amount: converted, paymentMethod: data.get("paymentMethod"), date: data.get("date") };
+    const next = { id: record?.id || uid(), name: data.get("name").trim(), type: data.get("type"), currency, originalAmount: original, amount: converted, paymentMethod: data.get("paymentMethod"), date: data.get("date"), createdAt: record?.createdAt || nowIso(), updatedAt: nowIso() };
     if (record) Object.assign(record, next); else project.records.push(next);
     saveState();
     closeSheet();
