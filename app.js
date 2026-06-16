@@ -69,6 +69,14 @@ function formatDate(value) { return new Intl.DateTimeFormat("zh-CN", { month: "s
 function currencyOptions(selected = "CNY") { return Object.entries(currencies).map(([code, item]) => `<option value="${code}" ${code === selected ? "selected" : ""}>${item.label} · ${code}</option>`).join(""); }
 function originalMoney(record, project) { return money(record.originalAmount ?? record.amount, record.currency || project.currency); }
 function convertCurrency(amount, from, to) { return Number(amount || 0) * defaultRates[from] / defaultRates[to]; }
+function parseAmountText(value) { return Number(String(value).replace(/,/g, "")) || 0; }
+function formatAmountText(value) {
+  const text = String(value).replace(/[^\d.]/g, "");
+  const [whole, decimal = ""] = text.split(".");
+  const formatted = whole ? new Intl.NumberFormat("en-US").format(Number(whole)) : "";
+  return text.includes(".") ? `${formatted}.${decimal.slice(0, 2)}` : formatted;
+}
+function currencyLabel(code) { return `<b>${currencies[code].label}</b><em> · ${code}</em>`; }
 function rateHint(currency, rate, baseCurrency) {
   const unit = currency === "IDR" ? 100000 : 1;
   return `${currency} ${new Intl.NumberFormat("zh-CN").format(unit)} ≈ ${money(rate * unit, baseCurrency)}`;
@@ -306,7 +314,7 @@ function openProjectSheet(projectId = null) {
 }
 
 function openConverterSheet() {
-  sheet("货币换算", `<form id="converter-form"><div class="converter-lines"><label class="converter-line"><span data-from-label>印尼盾 · IDR</span><input name="amount" type="number" min="0" step="0.01" inputmode="decimal" placeholder="输入金额"></label><div class="converter-line"><span data-to-label>人民币 · CNY</span><strong data-converter-result>¥0</strong></div></div><small class="converter-rate" data-converter-rate></small><button class="converter-settings-toggle" type="button" data-settings-toggle>设置货币</button><div class="converter-settings" data-converter-settings hidden><label class="field"><span>从</span><select name="from">${currencyOptions("IDR")}</select></label><label class="field"><span>换算到</span><select name="to">${currencyOptions("CNY")}</select></label><button class="secondary swap-button" type="button" data-swap>对调</button></div></form>`, "", "converter-sheet");
+  sheet("货币换算", `<form id="converter-form"><div class="converter-lines"><label class="converter-line"><span data-from-label>${currencyLabel("IDR")}</span><input name="amount" type="text" inputmode="decimal" placeholder="输入金额"></label><div class="converter-line"><span data-to-label>${currencyLabel("CNY")}</span><strong data-converter-result>¥0</strong></div></div><small class="converter-rate" data-converter-rate></small><button class="converter-settings-toggle" type="button" data-settings-toggle>设置货币</button><div class="converter-settings" data-converter-settings hidden><label class="field"><span>从</span><select name="from">${currencyOptions("IDR")}</select></label><label class="field"><span>换算到</span><select name="to">${currencyOptions("CNY")}</select></label><button class="secondary swap-button" type="button" data-swap>对调</button></div></form>`, "", "converter-sheet");
   const form = document.querySelector("#converter-form");
   const amountInput = form.elements.amount;
   const fromSelect = form.elements.from;
@@ -317,13 +325,16 @@ function openConverterSheet() {
   const toLabel = form.querySelector("[data-to-label]");
   const settings = form.querySelector("[data-converter-settings]");
   const update = () => {
-    const converted = convertCurrency(Number(amountInput.value), fromSelect.value, toSelect.value);
-    fromLabel.textContent = `${currencies[fromSelect.value].label} · ${fromSelect.value}`;
-    toLabel.textContent = `${currencies[toSelect.value].label} · ${toSelect.value}`;
+    const converted = convertCurrency(parseAmountText(amountInput.value), fromSelect.value, toSelect.value);
+    fromLabel.innerHTML = currencyLabel(fromSelect.value);
+    toLabel.innerHTML = currencyLabel(toSelect.value);
     result.textContent = amountInput.value ? money(converted, toSelect.value) : money(0, toSelect.value);
     rate.textContent = `${rateHint(fromSelect.value, defaultRates[fromSelect.value] / defaultRates[toSelect.value], toSelect.value)} · 固定参考汇率`;
   };
-  amountInput.oninput = update;
+  amountInput.oninput = () => {
+    amountInput.value = formatAmountText(amountInput.value);
+    update();
+  };
   fromSelect.onchange = update;
   toSelect.onchange = update;
   form.querySelector("[data-settings-toggle]").onclick = () => {
