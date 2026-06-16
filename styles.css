@@ -123,8 +123,8 @@ button { color: inherit; }
 .swap-button { min-height: 50px; align-self: end; }
 .converter-lines { display: grid; gap: 12px; }
 .converter-line { display: grid; grid-template-columns: 112px minmax(0, 1fr); align-items: center; gap: 12px; }
-.converter-line > span { color: var(--muted); font-size: 14px; font-weight: 650; }
-.converter-line input, .converter-line strong { width: 100%; min-height: 64px; border: 0; border-radius: 20px; background: var(--sage); color: var(--ink); padding: 0 18px; font-family: "Avenir Next", sans-serif; font-size: 30px; font-weight: 650; font-variant-numeric: tabular-nums; display: flex; align-items: center; }
+.converter-line > span { color: var(--muted); font-size: 16px; font-weight: 650; }
+.converter-line input, .converter-line strong { width: 100%; min-height: 64px; border: 0; border-radius: 20px; background: var(--sage); color: var(--ink); padding: 0 18px; font-family: "Avenir Next", sans-serif; font-size: 26px; font-weight: 650; font-variant-numeric: tabular-nums; display: flex; align-items: center; }
 .converter-line input:focus { outline: 0; box-shadow: 0 0 0 3px rgba(137,152,134,.22); }
 .converter-rate { display: block; color: var(--sage-deep); font-size: 12px; margin: 12px 0 4px 124px; }
 .converter-settings-toggle { width: 100%; margin-top: 12px; text-align: center; }

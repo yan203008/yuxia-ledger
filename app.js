@@ -158,7 +158,7 @@ function homeView() {
       }).join("") : `<div class="empty">还没有资金项目。<br>建立第一个项目后就可以开始记账。</div>`}
     </section>
     ${archivedCount ? `<button class="archive-entry" data-action="archive">已归档项目 <span>${archivedCount} ›</span></button>` : ""}
-    <div class="fab-bar"><button class="secondary" data-action="convert">换算</button><button class="primary" data-action="new-project">＋ 新增项目</button></div>
+    <div class="fab-bar"><button class="primary" data-action="convert">货币换算</button><button class="primary" data-action="new-project">＋ 新增项目</button></div>
   </main>`;
 }
 
