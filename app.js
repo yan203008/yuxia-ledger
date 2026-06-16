@@ -365,7 +365,7 @@ function openRecordSheet(recordId = null) {
   const recordCurrency = record?.currency || project.defaultCurrency || "IDR";
   const convertedAmount = record?.amount ?? "";
   const originalAmount = record?.originalAmount ?? record?.amount ?? "";
-  sheet(record ? "编辑记录" : "记一笔", `<form id="record-form"><label class="field"><span>消费名称</span><input name="name" required maxlength="40" autocomplete="off" value="${escapeHtml(record?.name || "")}" placeholder="例如：巴厘岛晚餐"></label><label class="field"><span>消费类型</span><select name="type">${typeOptions(record?.type || "")}</select></label><div class="helper" data-match-helper>${record?.type ? "可以手动修改" : "匹配到预设时会自动填写，也可以留空"}</div><div class="amount-grid"><label class="field"><span>支付币种</span><select name="currency">${currencyOptions(recordCurrency)}</select></label><label class="field"><span>原始金额</span><input name="originalAmount" required type="number" min="0.01" step="0.01" inputmode="decimal" value="${originalAmount}" placeholder="0"></label></div><div data-conversion><label class="field"><span>折合 ${currencies[project.currency].label}（${project.currency}）</span><input name="amount" required type="number" min="0.01" step="0.01" inputmode="decimal" value="${convertedAmount}" placeholder="0"></label><div class="helper" data-rate-helper></div></div><label class="field"><span>支付方式（可不选）</span><select name="paymentMethod"><option value="">不选择</option>${["现金", "Visa", "Mastercard", "支付宝", "微信", "其他"].map(item => `<option value="${item}" ${record?.paymentMethod === item ? "selected" : ""}>${item}</option>`).join("")}</select></label><label class="field"><span>日期</span><input name="date" required type="date" value="${record?.date || today()}"></label><div class="helper">默认记录创建当天，可修改</div><div class="sheet-actions">${record ? `<button class="danger" type="button" data-delete>删除</button>` : ""}<button class="primary" type="submit">保存并扣减</button></div></form>`);
+  sheet(record ? "编辑记录" : "记一笔", `<form id="record-form"><label class="field"><span>消费名称</span><input name="name" required maxlength="40" autocomplete="off" value="${escapeHtml(record?.name || "")}" placeholder="例如：巴厘岛晚餐"></label><label class="field"><span>消费类型</span><select name="type">${typeOptions(record?.type || "")}</select></label><div class="helper" data-match-helper>${record?.type ? "可以手动修改" : "匹配到预设时会自动填写，也可以留空"}</div><div class="amount-grid"><label class="field"><span>支付币种</span><select name="currency">${currencyOptions(recordCurrency)}</select></label><label class="field"><span>原始金额</span><input name="originalAmount" required type="text" inputmode="decimal" value="${formatAmountText(originalAmount)}" placeholder="0"></label></div><div data-conversion><label class="field"><span>折合 ${currencies[project.currency].label}（${project.currency}）</span><input name="amount" required type="number" min="0.01" step="0.01" inputmode="decimal" value="${convertedAmount}" placeholder="0"></label><div class="helper" data-rate-helper></div></div><label class="field"><span>支付方式（可不选）</span><select name="paymentMethod"><option value="">不选择</option>${["现金", "Visa", "Mastercard", "支付宝", "微信", "其他"].map(item => `<option value="${item}" ${record?.paymentMethod === item ? "selected" : ""}>${item}</option>`).join("")}</select></label><label class="field"><span>日期</span><input name="date" required type="date" value="${record?.date || today()}"></label><div class="helper">默认记录创建当天，可修改</div><div class="sheet-actions">${record ? `<button class="danger" type="button" data-delete>删除</button>` : ""}<button class="primary" type="submit">保存并扣减</button></div></form>`);
   const form = document.querySelector("#record-form");
   const nameInput = form.elements.name;
   const typeSelect = form.elements.type;
@@ -384,23 +384,26 @@ function openRecordSheet(recordId = null) {
     conversion.hidden = isBase;
     amountInput.required = !isBase;
     if (isBase) {
-      amountInput.value = originalInput.value;
+      amountInput.value = parseAmountText(originalInput.value);
       rateHelper.textContent = "";
       return;
     }
     const rate = defaultRates[currency];
-    if (!amountWasEdited && rate && originalInput.value) amountInput.value = (Number(originalInput.value) * rate).toFixed(2).replace(/\.00$/, "");
+    if (!amountWasEdited && rate && originalInput.value) amountInput.value = (parseAmountText(originalInput.value) * rate).toFixed(2).replace(/\.00$/, "");
     rateHelper.textContent = `按固定参考汇率估算：${rateHint(currency, rate, project.currency)}，可修改`;
   };
   currencySelect.onchange = () => { amountWasEdited = false; updateConversion(); };
-  originalInput.oninput = updateConversion;
+  originalInput.oninput = () => {
+    originalInput.value = formatAmountText(originalInput.value);
+    updateConversion();
+  };
   amountInput.oninput = () => { amountWasEdited = true; };
   updateConversion();
   form.onsubmit = event => {
     event.preventDefault();
     const data = new FormData(form);
     const currency = data.get("currency");
-    const original = Number(data.get("originalAmount"));
+    const original = parseAmountText(data.get("originalAmount"));
     const converted = currency === project.currency ? original : Number(data.get("amount"));
     const next = { id: record?.id || uid(), name: data.get("name").trim(), type: data.get("type"), currency, originalAmount: original, amount: converted, paymentMethod: data.get("paymentMethod"), date: data.get("date") };
     if (record) Object.assign(record, next); else project.records.push(next);
