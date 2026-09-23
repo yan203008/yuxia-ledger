@@ -1,459 +1,377 @@
-const STORAGE_KEY = "yuxia-ledger-v1";
-const today = () => new Date().toLocaleDateString("sv-SE");
+import { POOLS, POOL_IDS, MONTH_RE, DATE_RE, monthOf, todayLocal, shiftMonth, endOfMonth, monthLabel, createState, budgetsFor, setBudgets, ensureMonth, monthlyEntries, monthlyTotals, matchPreset, validateState, roundMoney } from "./core.mjs";
+
+const STORAGE_KEY = "yuxia-monthly-v1";
+const money = value => new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY", maximumFractionDigits: 2 }).format(Number(value) || 0);
+const esc = value => String(value ?? "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
 const uid = () => crypto.randomUUID();
-const nowIso = () => new Date().toISOString();
-const currencies = {
-  CNY: { label: "人民币", symbol: "¥" },
-  IDR: { label: "印尼盾", symbol: "Rp" },
-  USD: { label: "美元", symbol: "$" }
-};
-const defaultRates = { CNY: 1, USD: 6.81, IDR: 0.000376 };
-const money = (value, currency = "CNY") => new Intl.NumberFormat("zh-CN", {
-  style: "currency",
-  currency: currencies[currency] ? currency : "CNY",
-  minimumFractionDigits: 0,
-  maximumFractionDigits: 2
-}).format(Number(value) || 0);
-
-const defaultState = {
-  projects: [],
-  types: ["餐饮", "零食", "交通", "购物", "日用", "娱乐", "医疗", "其他"],
-  presets: [
-    { id: uid(), name: "奶茶", keywords: ["奶茶", "霸王茶姬", "喜茶"], type: "零食" },
-    { id: uid(), name: "打车", keywords: ["打车", "滴滴", "出租车"], type: "交通" },
-    { id: uid(), name: "午饭", keywords: ["午饭", "午餐"], type: "餐饮" }
-  ]
-};
-
-let state = loadState();
-let route = { page: "home", projectId: null };
+const nowMonth = () => monthOf(new Date());
+const poolName = id => POOLS.find(pool => pool.id === id)?.name || "";
+const dateLabel = date => Number(date.slice(5, 7)) + "月" + Number(date.slice(8)) + "日";
+const sortModes = { "date-desc": "日期：最新优先", "date-asc": "日期：最早优先", "amount-desc": "金额：从高到低", "amount-asc": "金额：从低到高" };
 
 function loadState() {
   try {
-    const normalized = normalizeState(JSON.parse(localStorage.getItem(STORAGE_KEY)) || structuredClone(defaultState));
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
-    return normalized;
-  }
-  catch { return structuredClone(defaultState); }
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return saved ? validateState(JSON.parse(saved)) : createState();
+  } catch { return createState(); }
 }
-function normalizeState(value) {
-  if (!value || !Array.isArray(value.projects) || !Array.isArray(value.types) || !Array.isArray(value.presets)) throw new Error("Invalid data");
-  value.projects.forEach(project => {
-    if (!project.id || typeof project.name !== "string" || !Number.isFinite(Number(project.total)) || !Array.isArray(project.records)) throw new Error("Invalid project");
-    const oldProjectCurrency = project.currency || "CNY";
-    const baseRate = defaultRates[oldProjectCurrency] || 1;
-    if (oldProjectCurrency !== "CNY" && !project.convertedToCny) {
-      project.total = Number(project.total) * baseRate;
-      project.records.forEach(record => { record.amount = Number(record.amount) * baseRate; });
-      project.convertedToCny = true;
-    }
-    project.currency = "CNY";
-    project.defaultCurrency = currencies[project.defaultCurrency] ? project.defaultCurrency : "IDR";
-    project.archived = Boolean(project.archived);
-    project.records.forEach(record => {
-      if (!record.id || typeof record.name !== "string" || !Number.isFinite(Number(record.amount)) || typeof record.date !== "string") throw new Error("Invalid record");
-      const supportedCurrency = currencies[record.currency] ? record.currency : "CNY";
-      record.originalAmount = supportedCurrency === "CNY"
-        ? Number(record.amount)
-        : Number.isFinite(Number(record.originalAmount)) ? Number(record.originalAmount) : Number(record.amount);
-      record.currency = supportedCurrency;
-      record.paymentMethod = typeof record.paymentMethod === "string" ? record.paymentMethod : "";
-      record.createdAt = typeof record.createdAt === "string" ? record.createdAt : `${record.date}T12:00:00.000`;
-      record.updatedAt = typeof record.updatedAt === "string" ? record.updatedAt : record.createdAt;
-    });
-  });
-  return value;
+let state = loadState();
+let route = { page: "home", month: nowMonth() };
+let settingsReturn = "home";
+let poolsExpanded = false;
+const currentMonthWasMissing = !state.months[nowMonth()];
+ensureMonth(state, nowMonth());
+function save() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+if (currentMonthWasMissing) save();
+function toast(message) {
+  const el = document.querySelector("#toast");
+  el.textContent = message; el.classList.add("show");
+  setTimeout(() => el.classList.remove("show"), 2000);
 }
-function saveState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
-function remaining(project) { return project.total - project.records.reduce((sum, item) => sum + Number(item.amount), 0); }
-function projectMoney(project, value) { return money(value, project.currency); }
-function escapeHtml(value = "") { return String(value).replace(/[&<>"]/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[char])); }
-function formatDate(value) { return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" }).format(new Date(`${value}T12:00:00`)); }
-function currencyOptions(selected = "CNY") { return Object.entries(currencies).map(([code, item]) => `<option value="${code}" ${code === selected ? "selected" : ""}>${item.label} · ${code}</option>`).join(""); }
-function originalMoney(record, project) { return money(record.originalAmount ?? record.amount, record.currency || project.currency); }
-function convertCurrency(amount, from, to) { return Number(amount || 0) * defaultRates[from] / defaultRates[to]; }
-function parseAmountText(value) { return Number(String(value).replace(/,/g, "")) || 0; }
-function formatAmountText(value) {
-  const text = String(value).replace(/[^\d.]/g, "");
-  const [whole, decimal = ""] = text.split(".");
-  const formatted = whole ? new Intl.NumberFormat("en-US").format(Number(whole)) : "";
-  return text.includes(".") ? `${formatted}.${decimal.slice(0, 2)}` : formatted;
-}
-function currencyLabel(code) { return `<b>${currencies[code].label}</b><em> · ${code}</em>`; }
-function rateHint(currency, rate, baseCurrency) {
-  const unit = currency === "IDR" ? 100000 : 1;
-  return `${currency} ${new Intl.NumberFormat("zh-CN").format(unit)} ≈ ${money(rate * unit, baseCurrency)}`;
-}
-
-const sortOptions = {
-  "date-desc": "最新优先",
-  "date-asc": "最早优先",
-  "amount-desc": "金额从高到低",
-  "amount-asc": "金额从低到高"
-};
-
-function sortedRecords(project, records = project.records) {
-  const mode = project.sortMode || "date-desc";
-  return [...records].sort((a, b) => {
-    const newest = `${b.date}T${b.createdAt || ""}`.localeCompare(`${a.date}T${a.createdAt || ""}`);
-    const oldest = `${a.date}T${a.createdAt || ""}`.localeCompare(`${b.date}T${b.createdAt || ""}`);
-    if (mode === "date-asc") return oldest;
-    if (mode === "amount-desc") return Number(b.amount) - Number(a.amount);
-    if (mode === "amount-asc") return Number(a.amount) - Number(b.amount);
-    return newest;
-  });
-}
-
-function recordTypes(project) {
-  return [...new Set(project.records.map(record => record.type || "未分类"))].sort((a, b) => a.localeCompare(b, "zh-CN"));
-}
-
-function filteredRecords(project) {
-  const selected = project.filterType || "all";
-  const records = selected === "all"
-    ? project.records
-    : project.records.filter(record => (record.type || "未分类") === selected);
-  return sortedRecords(project, records);
-}
-
-function categoryStats(project) {
-  const totals = new Map();
-  project.records.forEach(record => {
-    const type = record.type || "未分类";
-    totals.set(type, (totals.get(type) || 0) + Number(record.amount));
-  });
-  const spent = [...totals.values()].reduce((sum, value) => sum + value, 0);
-  return [...totals.entries()]
-    .map(([type, amount]) => ({ type, amount, percent: spent ? amount / spent * 100 : 0 }))
-    .sort((a, b) => b.amount - a.amount);
-}
-
-function dailyStats(project) {
-  const totals = new Map();
-  project.records.forEach(record => totals.set(record.date, (totals.get(record.date) || 0) + Number(record.amount)));
-  const recordDates = project.records.map(record => record.date).sort();
-  const endText = recordDates.at(-1) > today() ? recordDates.at(-1) : today();
-  const end = new Date(`${endText}T12:00:00`);
-  const start = new Date(`${recordDates[0] || project.createdAt || today()}T12:00:00`);
-  const days = [];
-  for (const cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
-    const date = cursor.toLocaleDateString("sv-SE");
-    days.push({ date, amount: totals.get(date) || 0 });
-  }
-  return days;
-}
-
-function navigate(page, projectId = null) { route = { page, projectId }; closeSheet(); render(); scrollTo(0, 0); }
-function toast(message) { const el = document.querySelector("#toast"); el.textContent = message; el.classList.add("show"); setTimeout(() => el.classList.remove("show"), 1800); }
-
-function render() {
-  const app = document.querySelector("#app");
-  if (route.page === "project") app.innerHTML = projectView();
-  else if (route.page === "archive") app.innerHTML = archiveView();
-  else if (route.page === "settings") app.innerHTML = settingsView();
-  else app.innerHTML = homeView();
-  bindPageEvents();
-  const dailyScroll = document.querySelector(".daily-scroll");
-  if (dailyScroll) requestAnimationFrame(() => requestAnimationFrame(() => {
-    dailyScroll.scrollLeft = Math.max(0, dailyScroll.scrollWidth - dailyScroll.clientWidth);
-  }));
-}
-
-function homeView() {
-  const projects = state.projects.filter(project => !project.archived);
-  const archivedCount = state.projects.length - projects.length;
-  return `<main class="app-shell">
-    <header class="topbar"><div><p class="eyebrow">我的资金计划</p><h1>余下</h1></div><button class="icon-button" data-action="settings" aria-label="设置">⚙︎</button></header>
-    <section class="project-list">
-      ${projects.length ? projects.map(project => {
-        const left = remaining(project); const percent = Math.max(0, Math.min(100, left / project.total * 100));
-        return `<button class="project-card" data-project="${project.id}"><div class="project-card-top"><div><h2>${escapeHtml(project.name)}</h2><span class="subtle">总额 ${projectMoney(project, project.total)}</span></div><div><div class="subtle">剩余</div><div class="balance">${projectMoney(project, left)}</div></div></div><div class="project-currency">${currencies[project.currency].label} · ${project.currency}</div><div class="progress"><span style="width:${percent}%"></span></div></button>`;
-      }).join("") : `<div class="empty">还没有资金项目。<br>建立第一个项目后就可以开始记账。</div>`}
-    </section>
-    ${archivedCount ? `<button class="archive-entry" data-action="archive">已归档项目 <span>${archivedCount} ›</span></button>` : ""}
-    <div class="fab-bar"><button class="primary" data-action="convert">货币换算</button><button class="primary" data-action="new-project">＋ 新增项目</button></div>
-  </main>`;
-}
-
-function archiveView() {
-  const projects = state.projects.filter(project => project.archived);
-  return `<main class="app-shell">
-    <header class="topbar"><button class="back-button" data-action="home">‹ 返回</button><h1 style="font-size:24px">已归档项目</h1><span style="width:42px"></span></header>
-    <p class="page-note">归档只会从首页隐藏项目，账目仍然完整保留。</p>
-    <section class="project-list archived-list">
-      ${projects.length ? projects.map(project => `<div class="archived-card"><button data-project="${project.id}"><span><strong>${escapeHtml(project.name)}</strong><small>${projectMoney(project, remaining(project))} 剩余</small><small>创建于 ${formatDate(project.createdAt || today())}</small></span><span>›</span></button><button class="restore-button" data-restore="${project.id}">恢复</button></div>`).join("") : `<div class="empty">还没有归档项目。</div>`}
-    </section>
-  </main>`;
-}
-
-function projectView() {
-  const project = state.projects.find(item => item.id === route.projectId);
-  if (!project) { route = { page: "home", projectId: null }; return homeView(); }
-  const records = filteredRecords(project);
-  const types = recordTypes(project);
-  const stats = categoryStats(project);
-  const days = dailyStats(project);
-  const maxDaily = Math.max(...days.map(day => day.amount), 1);
-  const spent = project.total - remaining(project);
-  return `<main class="app-shell">
-    <header class="topbar"><button class="back-button" data-action="home">‹ 所有项目</button><button class="icon-button" data-action="edit-project" aria-label="编辑项目">•••</button></header>
-    <section class="balance-card"><div class="label">${escapeHtml(project.name)} · 剩余 · ${project.currency}</div><div class="big-number">${projectMoney(project, remaining(project))}</div><div class="balance-meta"><span>总额 ${projectMoney(project, project.total)}</span><span>已用 ${projectMoney(project, project.total - remaining(project))}</span></div></section>
-    <div class="section-title"><h2>消费记录</h2><div class="record-tools"><button class="sort-button" data-action="filter-records">${(project.filterType || "all") === "all" ? "全部分类" : escapeHtml(project.filterType)}⌄</button><button class="sort-button" data-action="sort-records">${sortOptions[project.sortMode || "date-desc"]}⌄</button></div></div>
-    <div class="record-count">${records.length} 笔记录${(project.filterType || "all") !== "all" ? ` · ${escapeHtml(project.filterType)}` : ""}</div>
-    ${records.length ? `<section class="record-list">${records.map(record => { const foreign = (record.currency || project.currency) !== project.currency; return `<button class="record" data-record="${record.id}"><span class="record-name">${escapeHtml(record.name)}</span><span class="record-amount">-${projectMoney(project, record.amount)}</span><span class="record-meta">${escapeHtml(record.type || "未分类")} · ${formatDate(record.date)}${record.paymentMethod ? ` · ${escapeHtml(record.paymentMethod)}` : ""}</span><span class="record-meta record-original">${foreign ? `原金额 ${originalMoney(record, project)}` : ""}</span></button>`; }).join("")}</section>` : `<div class="empty compact-empty">这个分类下还没有消费记录。</div>`}
-    <div class="section-title"><h2>消费分类</h2><span class="subtle">共 ${projectMoney(project, spent)}</span></div>
-    ${stats.length ? `<section class="dashboard-card">${stats.map((item, index) => `<div class="category-row"><div class="category-meta"><strong>${escapeHtml(item.type)}</strong><span>${projectMoney(project, item.amount)} · ${item.percent.toFixed(1)}%</span></div><div class="category-track"><span class="category-fill tone-${index % 5}" style="width:${item.percent}%"></span></div></div>`).join("")}</section>` : `<section class="dashboard-card dashboard-empty">还没有可统计的数据</section>`}
-    <div class="section-title"><h2>每日消费</h2><span class="subtle">全部记录</span></div>
-    <section class="daily-card">${project.records.length ? `<div class="daily-scroll"><div class="daily-chart">${days.map((day, index) => `<div class="daily-column" title="${day.date} ${projectMoney(project, day.amount)}"><span class="daily-value">${day.amount ? projectMoney(project, day.amount) : ""}</span><div class="daily-bar-wrap"><span class="daily-bar" style="height:${day.amount ? Math.max(5, day.amount / maxDaily * 100) : 0}%"></span></div><span class="daily-label">${index === 0 || index === days.length - 1 || day.date.endsWith("-01") ? formatDate(day.date) : new Date(`${day.date}T12:00:00`).getDate()}</span></div>`).join("")}</div></div>` : `<div class="dashboard-empty">还没有可展示的数据</div>`}</section>
-    <div class="fab-bar"><button class="primary" data-action="new-record">＋ 记一笔</button></div>
-  </main>`;
-}
-
-function settingsView() {
-  return `<main class="app-shell">
-    <header class="topbar"><button class="back-button" data-action="home">‹ 返回</button><h1 style="font-size:24px">设置</h1><span style="width:42px"></span></header>
-    <section class="settings-section"><div class="section-title"><h2>消费类型</h2><button class="text-button" data-action="new-type">＋ 新增</button></div><p>记账时可以选择，也可以留空。</p><div class="pills">${state.types.map(type => `<button class="pill" data-type="${escapeHtml(type)}">${escapeHtml(type)}</button>`).join("")}</div></section>
-    <section class="settings-section"><div class="section-title"><h2>常用消费名称</h2><button class="text-button" data-action="new-preset">＋ 新增</button></div><p>关键词命中时自动填写关联类型。没有关联类型时保持空白。</p><div class="setting-card">${state.presets.length ? state.presets.map(preset => `<button class="setting-row" data-preset="${preset.id}"><span><strong>${escapeHtml(preset.name)}</strong><span class="subtle">${escapeHtml(preset.keywords.join("、") || "无关键词")}</span></span><span class="subtle">${escapeHtml(preset.type || "未关联")} ›</span></button>`).join("") : `<div class="empty" style="padding:35px 10px">还没有常用名称</div>`}</div></section>
-    <section class="settings-section"><div class="section-title"><h2>数据</h2></div><p>账目只保存在当前设备。更换手机或清理浏览器数据前，请先导出备份。</p><div class="setting-card"><button class="setting-row" data-action="export"><span><strong>导出备份</strong><span class="subtle">保存为 JSON 文件</span></span><span>›</span></button><button class="setting-row" data-action="import"><span><strong>导入备份</strong><span class="subtle">从备份文件恢复数据</span></span><span>›</span></button></div></section>
-  </main>`;
-}
-
-function bindPageEvents() {
-  document.querySelectorAll("[data-project]").forEach(el => el.onclick = () => navigate("project", el.dataset.project));
-  document.querySelectorAll("[data-restore]").forEach(el => el.onclick = () => {
-    const project = state.projects.find(item => item.id === el.dataset.restore);
-    if (!project) return;
-    project.archived = false;
-    saveState();
-    render();
-    toast("项目已恢复到首页");
-  });
-  document.querySelectorAll("[data-record]").forEach(el => el.onclick = () => openRecordSheet(el.dataset.record));
-  document.querySelectorAll("[data-preset]").forEach(el => el.onclick = () => openPresetSheet(el.dataset.preset));
-  document.querySelectorAll("[data-type]").forEach(el => el.onclick = () => openTypeSheet(el.dataset.type));
-  document.querySelectorAll("[data-action]").forEach(el => {
-    const action = el.dataset.action;
-    if (action === "settings") el.onclick = () => navigate("settings");
-    if (action === "home") el.onclick = () => navigate("home");
-    if (action === "archive") el.onclick = () => navigate("archive");
-    if (action === "convert") el.onclick = () => openConverterSheet();
-    if (action === "new-project") el.onclick = () => openProjectSheet();
-    if (action === "edit-project") el.onclick = () => openProjectSheet(route.projectId);
-    if (action === "new-record") el.onclick = () => openRecordSheet();
-    if (action === "filter-records") el.onclick = openFilterSheet;
-    if (action === "sort-records") el.onclick = openSortSheet;
-    if (action === "new-type") el.onclick = () => openTypeSheet();
-    if (action === "new-preset") el.onclick = () => openPresetSheet();
-    if (action === "export") el.onclick = exportData;
-    if (action === "import") el.onclick = () => document.querySelector("#import-file").click();
-  });
-}
-
-function sheet(title, fields, actions = "", className = "") {
-  document.querySelector("#sheet-root").innerHTML = `<div class="sheet-backdrop ${className ? `${className}-backdrop` : ""}"><section class="sheet ${className}" role="dialog" aria-modal="true"><div class="grabber"></div><div class="sheet-head"><h2>${title}</h2><button class="close" data-close>×</button></div>${fields}${actions}</section></div>`;
+function closeSheet() { document.querySelector("#sheet-root").innerHTML = ""; }
+function sheet(title, body) {
+  document.querySelector("#sheet-root").innerHTML = `<div class="sheet-backdrop"><section class="sheet" role="dialog" aria-modal="true"><div class="grabber"></div><div class="sheet-head"><h2>${esc(title)}</h2><button class="close" data-close aria-label="关闭">×</button></div>${body}</section></div>`;
   document.querySelector("[data-close]").onclick = closeSheet;
   document.querySelector(".sheet-backdrop").onclick = event => { if (event.target.classList.contains("sheet-backdrop")) closeSheet(); };
 }
-function closeSheet() { document.querySelector("#sheet-root").innerHTML = ""; }
-
-function openSortSheet() {
-  const project = state.projects.find(item => item.id === route.projectId);
-  const selected = project.sortMode || "date-desc";
-  sheet("记录排序", `<div class="choice-list">${Object.entries(sortOptions).map(([value, label]) => `<button class="choice-row ${value === selected ? "selected" : ""}" data-sort="${value}"><span>${label}</span><span>${value === selected ? "✓" : ""}</span></button>`).join("")}</div>`);
-  document.querySelectorAll("[data-sort]").forEach(button => button.onclick = () => {
-    project.sortMode = button.dataset.sort;
-    saveState();
-    closeSheet();
-    render();
+function navigate(page, month = route.month) {
+  if (page === "settings") settingsReturn = route.page === "month" ? "month" : "home";
+  if (page === "month" && (route.page !== "month" || route.month !== month)) poolsExpanded = false;
+  route = { page, month };
+  if (page === "month") ensureMonth(state, month);
+  closeSheet(); render(); window.scrollTo(0, 0);
+}
+function poolOptions(selected = "daily") {
+  return POOLS.map(pool => `<option value="${pool.id}" ${selected === pool.id ? "selected" : ""}>${pool.name}</option>`).join("");
+}
+function tagChecks(selected = [], skipAvoid = false) {
+  return state.tags.filter(tag => !skipAvoid || tag.id !== "avoid").map(tag => `<label class="tag-choice"><input type="checkbox" name="tag" value="${esc(tag.id)}" ${selected.includes(tag.id) ? "checked" : ""}><span>#${esc(tag.name)}</span></label>`).join("");
+}
+const selectedTags = form => [...form.querySelectorAll('input[name="tag"]:checked')].map(input => input.value);
+function tagText(ids = []) {
+  return ids.map(id => state.tags.find(tag => tag.id === id)?.name).filter(Boolean).map(name => "#" + esc(name)).join(" ");
+}
+function render() {
+  document.querySelector("#app").innerHTML = route.page === "month" ? monthView(route.month) : route.page === "settings" ? settingsView() : homeView();
+  bindEvents();
+}
+function monthList() {
+  const current = nowMonth();
+  if (!state.months[current]) { ensureMonth(state, current); save(); }
+  return Object.keys(state.months).filter(month => MONTH_RE.test(month) && month <= current).sort().reverse();
+}
+function homeView() {
+  const current = nowMonth();
+  return `<main class="app-shell"><header class="topbar"><h1>余下</h1><button class="icon-button" data-action="settings" aria-label="设置">⚙︎</button></header>
+    <section class="month-list">${monthList().map(month => `<button class="month-row ${month === current ? "current" : ""}" data-month="${month}"><strong>${monthLabel(month)}</strong><span class="month-row-right">${month === current ? "进行中" : money(monthlyTotals(state, month).total)} <b>›</b></span></button>`).join("")}</section>
+    <div class="fab-bar"><button class="primary" data-action="new-month">＋ 新增月份</button></div></main>`;
+}
+function sortEntries(entries, mode) {
+  const list = [...entries];
+  if (mode === "amount-desc") list.sort((a, b) => b.amount - a.amount || b.date.localeCompare(a.date));
+  else if (mode === "amount-asc") list.sort((a, b) => a.amount - b.amount || b.date.localeCompare(a.date));
+  else if (mode === "date-asc") list.sort((a, b) => a.date.localeCompare(b.date) || String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+  else list.sort((a, b) => b.date.localeCompare(a.date) || String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  return list;
+}
+function recordRow(entry) {
+  const source = entry.source === "fixed" ? "固定消费" : entry.source === "installment" ? `分摊 ${entry.installmentIndex}/${entry.installmentMonths}` : "";
+  const details = [poolName(entry.poolId), source, tagText(entry.tagIds)].filter(Boolean).join(" · ");
+  return `<button class="record" data-record="${esc(entry.id)}" data-source="${entry.source}"><span class="record-name">${esc(entry.name)}</span><span class="record-amount">−${money(entry.amount)}</span><span class="record-meta">${details}</span><span class="record-meta record-date">${dateLabel(entry.date)}</span></button>`;
+}
+function recordList(entries, mode) {
+  if (!entries.length) return '<div class="empty compact-empty">还没有消费记录。</div>';
+  if (mode.startsWith("amount")) return `<section class="record-list">${entries.map(recordRow).join("")}</section>`;
+  const groups = new Map();
+  entries.forEach(entry => { if (!groups.has(entry.date)) groups.set(entry.date, []); groups.get(entry.date).push(entry); });
+  return [...groups.entries()].map(([date, group]) => `<div class="date-heading">${dateLabel(date)}</div><section class="record-list">${group.map(recordRow).join("")}</section>`).join("");
+}
+function fullPoolCards(summary) {
+  return POOLS.map(pool => {
+    const used = summary.spent[pool.id], budget = summary.budgets[pool.id], left = roundMoney(budget - used);
+    const ratio = budget ? used / budget : used ? 1 : 0;
+    const share = summary.total ? Math.round(used / summary.total * 100) : 0;
+    return `<button class="pool-card ${ratio >= 1 ? "over" : ratio >= .8 ? "near" : ""}" data-pool="${pool.id}"><div class="pool-top"><strong>${pool.name}</strong><span>${money(used)} / ${money(budget)}</span></div><div class="pool-balance">${left < 0 ? "超出 " + money(Math.abs(left)) : "剩余 " + money(left)}</div><div class="pool-share">占本月支出 ${share}%</div><div class="progress"><span style="width:${Math.min(100, Math.max(0, ratio * 100))}%"></span></div></button>`;
+  }).join("");
+}
+function compactPools(summary) {
+  return `<section class="budget-compact" aria-label="各预算池使用进度">${POOLS.map(pool => {
+    const used = summary.spent[pool.id], budget = summary.budgets[pool.id];
+    const ratio = budget ? used / budget : used ? 1 : 0;
+    const percent = budget ? Math.round(ratio * 100) + "%" : used ? "超额" : "0%";
+    return `<div class="budget-row ${ratio >= 1 ? "over" : ratio >= .8 ? "near" : ""}"><span class="budget-row-name">${pool.name}</span><div class="budget-row-track" role="progressbar" aria-label="${pool.name}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.min(100, Math.round(ratio * 100))}"><span style="width:${Math.min(100, Math.max(0, ratio * 100))}%"></span></div><strong class="budget-row-percent">${percent}</strong></div>`;
+  }).join("")}</section>`;
+}
+function monthView(month) {
+  const past = month < nowMonth();
+  const summary = monthlyTotals(state, month);
+  const data = ensureMonth(state, month);
+  const entries = data.filterPool === "all" ? summary.entries : summary.entries.filter(item => item.poolId === data.filterPool);
+  const sorted = sortEntries(entries, data.sortMode || "date-desc");
+  return `<main class="app-shell"><header class="topbar"><button class="back-button" data-action="home">‹ 月份</button><button class="icon-button" data-action="settings" aria-label="设置">⚙︎</button></header>
+    <div class="section-title budget-title"><h1>${month.replace("-", "")} 预算池</h1><button class="budget-toggle" data-action="toggle-pools" aria-expanded="${poolsExpanded}" aria-label="${poolsExpanded ? "收起" : "展开"}全部预算池"><span class="budget-triangle ${poolsExpanded ? "open" : ""}"></span></button></div>
+    ${poolsExpanded ? `<section class="pool-list">${fullPoolCards(summary)}</section>` : compactPools(summary)}
+    ${past ? `<section class="review-card"><h2>${Number(month.slice(5))}月总结</h2><div class="review-grid"><div><small>总支出</small><strong>${money(summary.total)}</strong></div><div><small>总预算</small><strong>${money(summary.budgetTotal)}</strong></div><div><small>${summary.remaining < 0 ? "超支" : "结余"}</small><strong>${money(Math.abs(summary.remaining))}</strong></div></div><p>#可避免 ${money(summary.avoidable)}</p></section>` : ""}
+    ${!past && summary.avoidable ? `<p class="avoidable-note">#可避免 ${money(summary.avoidable)}</p>` : ""}
+    <div class="section-title records-title"><h2>消费记录</h2><span class="subtle">${entries.length} 笔</span></div>
+    <div class="record-tools"><button class="sort-button" data-action="filter">${data.filterPool === "all" ? "全部预算池" : poolName(data.filterPool)}⌄</button><button class="sort-button" data-action="sort">${sortModes[data.sortMode || "date-desc"]}⌄</button></div>
+    ${recordList(sorted, data.sortMode || "date-desc")}
+    <div class="fab-bar"><button class="primary" data-action="new-record">＋ 记一笔</button></div></main>`;
+}
+function fixedIsActive(item) { return item.enabled; }
+function installmentStatus(item) {
+  const current = nowMonth(), start = monthOf(item.paidOn);
+  const elapsed = (Number(current.slice(0, 4)) - Number(start.slice(0, 4))) * 12 + Number(current.slice(5, 7)) - Number(start.slice(5, 7));
+  return elapsed < 0 ? "尚未开始" : elapsed >= item.months ? "已完成" : `还剩 ${item.months - elapsed} 个月（含本月）`;
+}
+function settingsView() {
+  const budgets = budgetsFor(state, nowMonth());
+  return `<main class="app-shell settings-page"><header class="topbar"><button class="back-button" data-action="back-month">‹ 返回</button><h1>设置</h1><span style="width:42px"></span></header>
+    <section class="settings-section"><div class="section-title"><h2>预算设置</h2><button class="text-button" data-action="budget">修改</button></div><p>修改本月与以后月份的额度，过去月份保持原样。</p><div class="setting-card">${POOLS.map(pool => `<div class="setting-row static-row"><span><strong>${pool.name}</strong><span class="subtle">${pool.hint}</span></span><b>${money(budgets[pool.id])}</b></div>`).join("")}</div></section>
+    <section class="settings-section"><div class="section-title"><h2>固定消费</h2><button class="text-button" data-action="new-fixed">＋ 新增</button></div><p>启用后每个月自动计入对应预算池。</p><div class="setting-card">${state.recurring.length ? state.recurring.map(item => `<button class="setting-row" data-fixed="${esc(item.id)}"><span><strong>${esc(item.name)}</strong><span class="subtle">${poolName(item.poolId)} · ${fixedIsActive(item) ? "已启用" : "已停用"}</span></span><span>${money(item.amount)} ›</span></button>`).join("") : '<div class="setting-empty">还没有固定消费</div>'}</div></section>
+    <section class="settings-section"><div class="section-title"><h2>分摊消费</h2><button class="text-button" data-action="new-installment">＋ 新增</button></div><p>实际支付一次，预算按月计入。</p><div class="setting-card">${state.installments.length ? state.installments.map(item => `<button class="setting-row" data-installment="${esc(item.id)}"><span><strong>${esc(item.name)}</strong><span class="subtle">${poolName(item.poolId)} · ${installmentStatus(item)}</span></span><span>${money(item.paidAmount)} / ${item.months}月 ›</span></button>`).join("") : '<div class="setting-empty">还没有分摊消费</div>'}</div></section>
+    <section class="settings-section"><div class="section-title"><h2>Tag 管理</h2><button class="text-button" data-action="new-tag">＋ 新增</button></div><div class="pills">${state.tags.map(tag => `<button class="pill" data-tag="${esc(tag.id)}">#${esc(tag.name)}</button>`).join("")}</div></section>
+    <section class="settings-section"><div class="section-title"><h2>常用消费</h2><button class="text-button" data-action="new-preset">＋ 新增</button></div><p>输入名称命中关键词时，自动选择预算池。</p><div class="setting-card">${state.presets.length ? state.presets.map(preset => `<button class="setting-row" data-preset="${esc(preset.id)}"><span><strong>${esc(preset.name)}</strong><span class="subtle">${esc(preset.keywords.join("、") || "无关键词")}</span></span><span>${poolName(preset.poolId)} ›</span></button>`).join("") : '<div class="setting-empty">还没有常用消费</div>'}</div></section>
+    <section class="settings-section"><div class="section-title"><h2>数据</h2></div><p>账目只保存在当前浏览器。更换设备前请导出 JSON 备份。</p><div class="setting-card"><button class="setting-row" data-action="export"><strong>导出备份</strong><span>›</span></button><button class="setting-row" data-action="import"><strong>导入备份</strong><span>›</span></button></div></section></main>`;
+}
+function bindEvents() {
+  document.querySelectorAll("[data-month]").forEach(button => button.onclick = () => navigate("month", button.dataset.month));
+  document.querySelectorAll("[data-pool]").forEach(button => button.onclick = () => {
+    const month = ensureMonth(state, route.month);
+    month.filterPool = month.filterPool === button.dataset.pool ? "all" : button.dataset.pool;
+    save(); render(); document.querySelector(".records-title")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  document.querySelectorAll("[data-record]").forEach(button => button.onclick = () => button.dataset.source === "manual" ? openRecordSheet(button.dataset.record) : openGeneratedDetail(button.dataset.record));
+  document.querySelectorAll("[data-fixed]").forEach(button => button.onclick = () => openFixedSheet(button.dataset.fixed));
+  document.querySelectorAll("[data-installment]").forEach(button => button.onclick = () => openInstallmentDetail(button.dataset.installment));
+  document.querySelectorAll("[data-tag]").forEach(button => button.onclick = () => openTagSheet(button.dataset.tag));
+  document.querySelectorAll("[data-preset]").forEach(button => button.onclick = () => openPresetSheet(button.dataset.preset));
+  document.querySelectorAll("[data-action]").forEach(button => button.onclick = () => {
+    const action = button.dataset.action;
+    if (action === "home") navigate("home");
+    else if (action === "settings") navigate("settings");
+    else if (action === "back-month") navigate(settingsReturn, route.month);
+    else if (action === "new-month") openMonthSheet();
+    else if (action === "toggle-pools") { poolsExpanded = !poolsExpanded; render(); }
+    else if (action === "new-record") openRecordSheet();
+    else if (action === "sort") openChoiceSheet("sort");
+    else if (action === "filter") openChoiceSheet("filter");
+    else if (action === "budget") openBudgetSheet();
+    else if (action === "new-fixed") openFixedSheet();
+    else if (action === "new-installment") openInstallmentSheet();
+    else if (action === "new-tag") openTagSheet();
+    else if (action === "new-preset") openPresetSheet();
+    else if (action === "export") exportData();
+    else if (action === "import") document.querySelector("#import-file").click();
   });
 }
-
-function openFilterSheet() {
-  const project = state.projects.find(item => item.id === route.projectId);
-  const selected = project.filterType || "all";
-  const options = [["all", "全部分类"], ...recordTypes(project).map(type => [type, type])];
-  sheet("筛选消费分类", `<div class="choice-list">${options.map(([value, label]) => `<button class="choice-row ${value === selected ? "selected" : ""}" data-filter-choice="${escapeHtml(value)}"><span>${escapeHtml(label)}</span><span>${value === selected ? "✓" : ""}</span></button>`).join("")}</div>`);
-  document.querySelectorAll("[data-filter-choice]").forEach(button => button.onclick = () => {
-    project.filterType = button.dataset.filterChoice;
-    saveState();
-    closeSheet();
-    render();
+function openMonthSheet() {
+  sheet("新增月份", `<form id="month-form"><label class="field"><span>选择月份</span><input name="month" required type="month" max="${nowMonth()}" value="${shiftMonth(nowMonth(), -1)}"></label><div class="sheet-actions"><button class="primary" type="submit">进入月份</button></div></form>`);
+  document.querySelector("#month-form").onsubmit = event => {
+    event.preventDefault();
+    const month = new FormData(event.currentTarget).get("month");
+    if (!MONTH_RE.test(month) || month > nowMonth()) return toast("请选择本月或过去的月份");
+    const existed = Boolean(state.months[month]);
+    ensureMonth(state, month);
+    save();
+    navigate("month", month);
+    if (existed) toast("已打开这个月份");
+  };
+}
+function openChoiceSheet(kind) {
+  const month = ensureMonth(state, route.month);
+  const choices = kind === "sort" ? Object.entries(sortModes) : [["all", "全部预算池"], ...POOLS.map(pool => [pool.id, pool.name])];
+  const selected = kind === "sort" ? month.sortMode : month.filterPool;
+  sheet(kind === "sort" ? "记录排序" : "筛选预算池", `<div class="choice-list">${choices.map(([id, name]) => `<button class="choice-row ${selected === id ? "selected" : ""}" data-choice="${id}">${name}<span>${selected === id ? "✓" : ""}</span></button>`).join("")}</div>`);
+  document.querySelectorAll("[data-choice]").forEach(button => button.onclick = () => {
+    if (kind === "sort") month.sortMode = button.dataset.choice;
+    else month.filterPool = button.dataset.choice;
+    save(); closeSheet(); render();
   });
 }
-
-function openProjectSheet(projectId = null) {
-  const project = state.projects.find(item => item.id === projectId);
-  sheet(project ? "项目设置" : "新增项目", `<form id="project-form"><label class="field"><span>项目名称</span><input name="name" required maxlength="30" value="${escapeHtml(project?.name || "")}" placeholder="例如：巴厘岛旅行"></label><label class="field"><span>总金额（人民币）</span><input name="total" required type="number" min="0" step="0.01" inputmode="decimal" value="${project?.total ?? ""}" placeholder="¥ 0"></label><div class="helper">所有项目统一使用人民币计算余额和统计</div><label class="field"><span>默认支付币种</span><select name="defaultCurrency">${currencyOptions(project?.defaultCurrency || "IDR")}</select></label><div class="helper">以后记一笔时会默认选中这个币种，仍可临时修改</div>${project ? `<section class="project-actions"><button class="secondary-action" type="button" data-archive>${project.archived ? "恢复到首页" : "归档项目"}<small>${project.archived ? "重新显示在首页" : "从首页隐藏，保留全部账目"}</small></button><button class="delete-action" type="button" data-delete>永久删除<small>同时删除项目内全部消费记录</small></button></section>` : ""}<div class="sheet-actions"><button class="primary" type="submit">保存</button></div></form>`);
-  document.querySelector("#project-form").onsubmit = event => {
+function openRecordSheet(id = null) {
+  const month = ensureMonth(state, route.month);
+  const record = month.records.find(item => item.id === id);
+  const defaultDate = route.month === nowMonth() ? todayLocal() : endOfMonth(route.month);
+  const tags = record?.tagIds || [];
+  sheet(record ? "编辑消费" : "记一笔", `<form id="record-form">
+    <label class="field quick-amount"><span>金额 · 人民币</span><input name="amount" required type="number" min="0.01" step="0.01" inputmode="decimal" value="${record?.amount ?? ""}" placeholder="0.00"></label>
+    <label class="field"><span>消费名称</span><input name="name" required maxlength="40" autocomplete="off" value="${esc(record?.name || "")}" placeholder="例如：午饭"></label>
+    <label class="field"><span>预算池</span><select name="poolId">${poolOptions(record?.poolId || "daily")}</select></label>
+    <label class="tag-choice quick-tag"><input type="checkbox" name="tag" value="avoid" ${tags.includes("avoid") ? "checked" : ""}><span>#可避免</span></label>
+    <details class="extra-fields" ${record && (record.date !== defaultDate || tags.some(tag => tag !== "avoid")) ? "open" : ""}><summary>日期和更多 Tag</summary>
+      <label class="field"><span>日期</span><input name="date" required type="date" min="${route.month}-01" max="${endOfMonth(route.month)}" value="${record?.date || defaultDate}"></label>
+      <div class="tag-list">${tagChecks(tags, true)}</div></details>
+    <div class="sheet-actions">${record ? '<button class="danger" type="button" data-delete>删除</button>' : ""}<button class="primary" type="submit">保存</button></div></form>`);
+  const form = document.querySelector("#record-form");
+  let autoPool = !record;
+  form.elements.name.oninput = () => { if (!autoPool) return; form.elements.poolId.value = matchPreset(state, form.elements.name.value) || "daily"; };
+  form.elements.poolId.onchange = () => { autoPool = false; };
+  form.onsubmit = event => {
+    event.preventDefault();
+    const data = new FormData(form), amount = Number(data.get("amount")), date = data.get("date");
+    if (!Number.isFinite(amount) || amount <= 0 || !DATE_RE.test(date) || monthOf(date) !== route.month) return toast("请检查金额和日期");
+    const next = { id: record?.id || uid(), name: data.get("name").trim(), amount: roundMoney(amount), poolId: data.get("poolId"), tagIds: selectedTags(form), date, createdAt: record?.createdAt || new Date().toISOString(), updatedAt: new Date().toISOString() };
+    if (!next.name || !POOL_IDS.has(next.poolId)) return toast("请填写名称和预算池");
+    if (record) Object.assign(record, next); else month.records.push(next);
+    save(); closeSheet(); render(); toast(record ? "记录已修改" : "已记下 " + next.name);
+  };
+  if (record) form.querySelector("[data-delete]").onclick = () => {
+    if (!confirm("确定删除这笔消费吗？金额会回到对应预算池。")) return;
+    month.records = month.records.filter(item => item.id !== record.id);
+    save(); closeSheet(); render(); toast("记录已删除，预算已恢复");
+  };
+  setTimeout(() => form.elements.amount.focus(), 80);
+}
+function openBudgetSheet() {
+  const budgets = budgetsFor(state, nowMonth());
+  sheet("设置月度预算", `<form id="budget-form">${POOLS.map(pool => `<label class="field"><span>${pool.name}</span><input name="${pool.id}" required type="number" min="0" step="0.01" inputmode="decimal" value="${budgets[pool.id]}"></label>`).join("")}<p class="helper">修改从本月起生效，过去月份的预算不变。</p><div class="sheet-actions"><button class="primary" type="submit">保存预算</button></div></form>`);
+  document.querySelector("#budget-form").onsubmit = event => {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
-    if (project) {
-      project.name = data.get("name").trim();
-      project.total = Number(data.get("total"));
-      project.defaultCurrency = data.get("defaultCurrency");
-    } else {
-      state.projects.push({ id: uid(), name: data.get("name").trim(), total: Number(data.get("total")), currency: "CNY", defaultCurrency: data.get("defaultCurrency"), createdAt: today(), archived: false, records: [] });
-    }
-    saveState();
-    closeSheet();
-    navigate(project ? "project" : "home", project?.id);
-    toast("项目已保存");
+    const next = Object.fromEntries(POOLS.map(pool => [pool.id, Number(data.get(pool.id))]));
+    if (Object.values(next).some(value => !Number.isFinite(value) || value < 0)) return toast("请输入正确预算");
+    setBudgets(state, nowMonth(), next); save(); closeSheet(); render(); toast("本月预算已更新");
   };
-  if (project) {
-    document.querySelector("[data-archive]").onclick = () => {
-      project.archived = !project.archived;
-      saveState();
-      closeSheet();
-      navigate(project.archived ? "home" : "project", project.archived ? null : project.id);
-      toast(project.archived ? "项目已归档" : "项目已恢复");
+}
+function activeRule(item) { return [...item.versions].reverse().find(rule => !rule.to); }
+function closeCurrentRule(item) {
+  const rule = activeRule(item);
+  if (!rule) return;
+  if (rule.from >= nowMonth()) item.versions = item.versions.filter(version => version !== rule);
+  else rule.to = shiftMonth(nowMonth(), -1);
+}
+function openFixedSheet(id = null) {
+  const item = state.recurring.find(entry => entry.id === id);
+  const active = item ? item.enabled : false;
+  sheet(item ? "编辑固定消费" : "新增固定消费", `<form id="fixed-form">
+    <label class="field"><span>名称</span><input name="name" required maxlength="40" value="${esc(item?.name || "")}" placeholder="例如：Codex"></label>
+    <label class="field"><span>每月金额</span><input name="amount" required type="number" min="0.01" step="0.01" inputmode="decimal" value="${item?.amount ?? ""}"></label>
+    <label class="field"><span>预算池</span><select name="poolId">${poolOptions(item?.poolId || "growth")}</select></label>
+    ${item ? `<p class="helper">开始于 ${esc(item.startDate)}；修改从本月起生效。</p>` : `<label class="field"><span>开始日期</span><input name="startDate" required type="date" value="${todayLocal()}"></label>`}
+    <div class="tag-list">${tagChecks(item?.tagIds || [])}</div>
+    <div class="sheet-actions"><button class="primary" type="submit">保存</button></div>
+    ${item ? `<div class="secondary-actions"><button type="button" data-toggle-fixed>${active ? "停用：从本月起不再计入" : "重新启用"}</button><button type="button" data-delete-fixed>永久删除</button></div>` : ""}</form>`);
+  const form = document.querySelector("#fixed-form");
+  form.onsubmit = event => {
+    event.preventDefault();
+    const data = new FormData(form), name = data.get("name").trim(), amount = Number(data.get("amount")), poolId = data.get("poolId"), tagIds = selectedTags(form);
+    if (!name || !Number.isFinite(amount) || amount <= 0 || !POOL_IDS.has(poolId)) return toast("请检查固定消费信息");
+    if (item) {
+      const effectiveMonth = active && activeRule(item)?.from > nowMonth() ? activeRule(item).from : nowMonth();
+      if (active) closeCurrentRule(item);
+      Object.assign(item, { name, amount: roundMoney(amount), poolId, tagIds });
+      if (active) item.versions.push({ from: effectiveMonth, to: null, name, amount: roundMoney(amount), poolId, tagIds });
+    } else {
+      const startDate = data.get("startDate");
+      if (!DATE_RE.test(startDate)) return toast("请选择开始日期");
+      state.recurring.push({ id: uid(), name, amount: roundMoney(amount), poolId, tagIds, startDate, enabled: true, versions: [{ from: monthOf(startDate), to: null, name, amount: roundMoney(amount), poolId, tagIds }] });
+    }
+    save(); closeSheet(); render(); toast("固定消费已保存");
+  };
+  if (item) {
+    form.querySelector("[data-toggle-fixed]").onclick = () => {
+      if (active) closeCurrentRule(item);
+      else item.versions.push({ from: nowMonth(), to: null, name: item.name, amount: item.amount, poolId: item.poolId, tagIds: item.tagIds || [] });
+      item.enabled = !active;
+      save(); closeSheet(); render(); toast(active ? "固定消费已停用" : "固定消费已启用");
     };
-    document.querySelector("[data-delete]").onclick = () => {
-      if (confirm(`确定永久删除“${project.name}”及其全部记录吗？此操作无法恢复。`)) {
-        state.projects = state.projects.filter(item => item.id !== project.id);
-        saveState();
-        closeSheet();
-        navigate(project.archived ? "archive" : "home");
-      }
+    form.querySelector("[data-delete-fixed]").onclick = () => {
+      if (!confirm("永久删除固定消费及其在所有月份的自动记录吗？")) return;
+      state.recurring = state.recurring.filter(entry => entry.id !== item.id);
+      save(); closeSheet(); render(); toast("固定消费已删除");
     };
   }
 }
-
-function openConverterSheet() {
-  sheet("货币换算", `<form id="converter-form"><div class="converter-lines"><label class="converter-line"><span data-from-label>${currencyLabel("IDR")}</span><input name="amount" type="text" inputmode="decimal" placeholder="输入金额"></label><div class="converter-line"><span data-to-label>${currencyLabel("CNY")}</span><strong data-converter-result>¥0</strong></div></div><small class="converter-rate" data-converter-rate></small><button class="converter-settings-toggle" type="button" data-settings-toggle>设置货币</button><div class="converter-settings" data-converter-settings hidden><label class="field"><span>从</span><select name="from">${currencyOptions("IDR")}</select></label><label class="field"><span>换算到</span><select name="to">${currencyOptions("CNY")}</select></label><button class="secondary swap-button" type="button" data-swap>对调</button></div></form>`, "", "converter-sheet");
-  const form = document.querySelector("#converter-form");
-  const amountInput = form.elements.amount;
-  const fromSelect = form.elements.from;
-  const toSelect = form.elements.to;
-  const result = form.querySelector("[data-converter-result]");
-  const rate = form.querySelector("[data-converter-rate]");
-  const fromLabel = form.querySelector("[data-from-label]");
-  const toLabel = form.querySelector("[data-to-label]");
-  const settings = form.querySelector("[data-converter-settings]");
-  const update = () => {
-    const converted = convertCurrency(parseAmountText(amountInput.value), fromSelect.value, toSelect.value);
-    fromLabel.innerHTML = currencyLabel(fromSelect.value);
-    toLabel.innerHTML = currencyLabel(toSelect.value);
-    result.textContent = amountInput.value ? money(converted, toSelect.value) : money(0, toSelect.value);
-    rate.textContent = `${rateHint(fromSelect.value, defaultRates[fromSelect.value] / defaultRates[toSelect.value], toSelect.value)} · 固定参考汇率`;
+function openInstallmentSheet() {
+  sheet("新增分摊消费", `<form id="installment-form">
+    <label class="field"><span>名称</span><input name="name" required maxlength="40" placeholder="例如：网费"></label>
+    <label class="field"><span>实际支付金额</span><input name="paidAmount" required type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="1200"></label>
+    <label class="field"><span>支付日期</span><input name="paidOn" required type="date" value="${todayLocal()}"></label>
+    <label class="field"><span>分摊月数</span><input name="months" required type="number" min="1" max="120" step="1" inputmode="numeric" value="12"></label>
+    <label class="field"><span>预算池</span><select name="poolId">${poolOptions("daily")}</select></label><div class="tag-list">${tagChecks()}</div>
+    <div class="sheet-actions"><button class="primary" type="submit">建立分摊</button></div></form>`);
+  const form = document.querySelector("#installment-form");
+  form.onsubmit = event => {
+    event.preventDefault();
+    const data = new FormData(form), name = data.get("name").trim(), paidAmount = Number(data.get("paidAmount")), months = Number(data.get("months")), paidOn = data.get("paidOn"), poolId = data.get("poolId");
+    if (!name || !Number.isFinite(paidAmount) || paidAmount <= 0 || !Number.isInteger(months) || months < 1 || months > 120 || !DATE_RE.test(paidOn) || !POOL_IDS.has(poolId)) return toast("请检查分摊信息");
+    state.installments.push({ id: uid(), name, paidAmount: roundMoney(paidAmount), paidOn, months, poolId, tagIds: selectedTags(form) });
+    save(); closeSheet(); render(); toast("分摊已建立");
   };
-  amountInput.oninput = () => {
-    amountInput.value = formatAmountText(amountInput.value);
-    update();
-  };
-  fromSelect.onchange = update;
-  toSelect.onchange = update;
-  form.querySelector("[data-settings-toggle]").onclick = () => {
-    settings.hidden = !settings.hidden;
-  };
-  form.querySelector("[data-swap]").onclick = () => {
-    const from = fromSelect.value;
-    fromSelect.value = toSelect.value;
-    toSelect.value = from;
-    update();
-  };
-  update();
-  setTimeout(() => amountInput.focus(), 100);
 }
-
-function findMatchedType(name) {
-  const query = name.trim().toLowerCase();
-  if (!query) return "";
-  const candidates = state.presets.flatMap(preset => [preset.name, ...preset.keywords].filter(Boolean).map(keyword => ({ keyword: keyword.toLowerCase(), type: preset.type })));
-  return candidates.filter(item => query.includes(item.keyword) || item.keyword.includes(query)).sort((a, b) => b.keyword.length - a.keyword.length)[0]?.type || "";
+function openInstallmentDetail(id) {
+  const item = state.installments.find(entry => entry.id === id);
+  if (!item) return;
+  sheet("分摊消费", `<div class="detail-lines"><strong>${esc(item.name)}</strong><p>实际支付：${money(item.paidAmount)} · ${esc(item.paidOn)}</p><p>分摊：${item.months} 个月 · ${poolName(item.poolId)}</p><p>${installmentStatus(item)}</p></div><div class="sheet-actions"><button class="danger" data-delete-installment>删除分摊</button><button class="primary" data-close-detail>完成</button></div>`);
+  document.querySelector("[data-close-detail]").onclick = closeSheet;
+  document.querySelector("[data-delete-installment]").onclick = () => {
+    if (!confirm("删除后所有月份的这笔分摊记录都会移除，确定吗？")) return;
+    state.installments = state.installments.filter(entry => entry.id !== id);
+    save(); closeSheet(); render(); toast("分摊已删除");
+  };
 }
-
-function typeOptions(selected = "") { return `<option value="">不选择</option>${state.types.map(type => `<option value="${escapeHtml(type)}" ${type === selected ? "selected" : ""}>${escapeHtml(type)}</option>`).join("")}`; }
-
-function openRecordSheet(recordId = null) {
-  const project = state.projects.find(item => item.id === route.projectId);
-  const record = project.records.find(item => item.id === recordId);
-  const recordCurrency = record?.currency || project.defaultCurrency || "IDR";
-  const convertedAmount = record?.amount ?? "";
-  const originalAmount = record?.originalAmount ?? record?.amount ?? "";
-  sheet(record ? "编辑记录" : "记一笔", `<form id="record-form"><label class="field"><span>消费名称</span><input name="name" required maxlength="40" autocomplete="off" value="${escapeHtml(record?.name || "")}" placeholder="例如：巴厘岛晚餐"></label><label class="field"><span>消费类型</span><select name="type">${typeOptions(record?.type || "")}</select></label><div class="helper" data-match-helper>${record?.type ? "可以手动修改" : "匹配到预设时会自动填写，也可以留空"}</div><div class="amount-grid"><label class="field"><span>支付币种</span><select name="currency">${currencyOptions(recordCurrency)}</select></label><label class="field"><span>原始金额</span><input name="originalAmount" required type="text" inputmode="decimal" value="${formatAmountText(originalAmount)}" placeholder="0"></label></div><div data-conversion><label class="field"><span>折合 ${currencies[project.currency].label}（${project.currency}）</span><input name="amount" required type="number" min="0.01" step="0.01" inputmode="decimal" value="${convertedAmount}" placeholder="0"></label><div class="helper" data-rate-helper></div></div><label class="field"><span>支付方式（可不选）</span><select name="paymentMethod"><option value="">不选择</option>${["现金", "Visa", "Mastercard", "支付宝", "微信", "其他"].map(item => `<option value="${item}" ${record?.paymentMethod === item ? "selected" : ""}>${item}</option>`).join("")}</select></label><label class="field"><span>日期</span><input name="date" required type="date" value="${record?.date || today()}"></label><div class="helper">默认记录创建当天，可修改</div><div class="sheet-actions">${record ? `<button class="danger" type="button" data-delete>删除</button>` : ""}<button class="primary" type="submit">保存并扣减</button></div></form>`);
-  const form = document.querySelector("#record-form");
-  const nameInput = form.elements.name;
-  const typeSelect = form.elements.type;
-  const currencySelect = form.elements.currency;
-  const originalInput = form.elements.originalAmount;
-  const amountInput = form.elements.amount;
-  const conversion = form.querySelector("[data-conversion]");
-  const rateHelper = form.querySelector("[data-rate-helper]");
-  let autoType = !record;
-  let amountWasEdited = Boolean(record);
-  nameInput.oninput = () => { if (!autoType) return; const matched = findMatchedType(nameInput.value); typeSelect.value = matched; document.querySelector("[data-match-helper]").textContent = matched ? `已根据消费名称匹配到“${matched}”` : "没有匹配预设，类型可以留空"; };
-  typeSelect.onchange = () => { autoType = false; document.querySelector("[data-match-helper]").textContent = "已手动选择，不会被名称覆盖"; };
-  const updateConversion = () => {
-    const currency = currencySelect.value;
-    const isBase = currency === project.currency;
-    conversion.hidden = isBase;
-    amountInput.required = !isBase;
-    if (isBase) {
-      amountInput.value = parseAmountText(originalInput.value);
-      rateHelper.textContent = "";
-      return;
-    }
-    const rate = defaultRates[currency];
-    if (!amountWasEdited && rate && originalInput.value) amountInput.value = (parseAmountText(originalInput.value) * rate).toFixed(2).replace(/\.00$/, "");
-    rateHelper.textContent = `按固定参考汇率估算：${rateHint(currency, rate, project.currency)}，可修改`;
+function openGeneratedDetail(id) {
+  const entry = monthlyEntries(state, route.month).find(item => item.id === id);
+  if (!entry) return;
+  const text = entry.source === "fixed" ? "固定消费 · 每月自动计入" : `分摊消费 · 第 ${entry.installmentIndex}/${entry.installmentMonths} 个月`;
+  sheet(entry.name, `<div class="detail-lines"><strong>本月计入 ${money(entry.amount)}</strong><p>${text}</p><p>预算池：${poolName(entry.poolId)}</p>${entry.source === "installment" ? `<p>实际支付 ${money(entry.paidAmount)}，分月扣减预算。</p>` : ""}</div><div class="sheet-actions"><button class="primary" data-go-settings>到设置中管理</button></div>`);
+  document.querySelector("[data-go-settings]").onclick = () => navigate("settings");
+}
+function openTagSheet(id = null) {
+  const tag = state.tags.find(item => item.id === id);
+  if (id === "avoid") { sheet("默认 Tag", '<p class="helper">#可避免 用于月度复盘，始终保留。</p>'); return; }
+  sheet(tag ? "编辑 Tag" : "新增 Tag", `<form id="tag-form"><label class="field"><span>Tag 名称</span><input name="name" required maxlength="20" value="${esc(tag?.name || "")}" placeholder="例如：衣服"></label><div class="sheet-actions">${tag ? '<button class="danger" type="button" data-delete-tag>删除</button>' : ""}<button class="primary" type="submit">保存</button></div></form>`);
+  const form = document.querySelector("#tag-form");
+  form.onsubmit = event => {
+    event.preventDefault();
+    const name = new FormData(form).get("name").trim().replace(/^#/, "");
+    if (!name || state.tags.some(item => item.name === name && item.id !== id)) return toast("Tag 名称已存在或为空");
+    if (tag) tag.name = name; else state.tags.push({ id: uid(), name });
+    save(); closeSheet(); render();
   };
-  currencySelect.onchange = () => { amountWasEdited = false; updateConversion(); };
-  originalInput.oninput = () => {
-    originalInput.value = formatAmountText(originalInput.value);
-    updateConversion();
+  if (tag) form.querySelector("[data-delete-tag]").onclick = () => {
+    if (!confirm("删除这个 Tag 吗？已有消费上的标记也会移除。")) return;
+    state.tags = state.tags.filter(item => item.id !== id);
+    Object.values(state.months).forEach(month => month.records.forEach(record => { record.tagIds = (record.tagIds || []).filter(tagId => tagId !== id); }));
+    state.recurring.forEach(item => { item.tagIds = (item.tagIds || []).filter(tagId => tagId !== id); item.versions.forEach(rule => { rule.tagIds = (rule.tagIds || []).filter(tagId => tagId !== id); }); });
+    state.installments.forEach(item => { item.tagIds = (item.tagIds || []).filter(tagId => tagId !== id); });
+    save(); closeSheet(); render();
   };
-  amountInput.oninput = () => { amountWasEdited = true; };
-  updateConversion();
+}
+function openPresetSheet(id = null) {
+  const preset = state.presets.find(item => item.id === id);
+  sheet(preset ? "编辑常用消费" : "新增常用消费", `<form id="preset-form"><label class="field"><span>消费名称</span><input name="name" required maxlength="30" value="${esc(preset?.name || "")}" placeholder="例如：咖啡"></label><label class="field"><span>识别关键词（用逗号分隔）</span><input name="keywords" value="${esc(preset?.keywords.join("，") || "")}" placeholder="咖啡，拿铁"></label><label class="field"><span>默认预算池</span><select name="poolId">${poolOptions(preset?.poolId || "daily")}</select></label><div class="sheet-actions">${preset ? '<button class="danger" type="button" data-delete-preset>删除</button>' : ""}<button class="primary" type="submit">保存</button></div></form>`);
+  const form = document.querySelector("#preset-form");
   form.onsubmit = event => {
     event.preventDefault();
     const data = new FormData(form);
-    const currency = data.get("currency");
-    const original = parseAmountText(data.get("originalAmount"));
-    const converted = currency === project.currency ? original : Number(data.get("amount"));
-    const next = { id: record?.id || uid(), name: data.get("name").trim(), type: data.get("type"), currency, originalAmount: original, amount: converted, paymentMethod: data.get("paymentMethod"), date: data.get("date"), createdAt: record?.createdAt || nowIso(), updatedAt: nowIso() };
-    if (record) Object.assign(record, next); else project.records.push(next);
-    saveState();
-    closeSheet();
-    render();
-    toast(record ? "记录已修改，余额已重算" : `已记录 ${next.name} ${projectMoney(project, next.amount)}`);
+    const next = { id: preset?.id || uid(), name: data.get("name").trim(), keywords: data.get("keywords").split(/[，,]/).map(item => item.trim()).filter(Boolean), poolId: data.get("poolId") };
+    if (!next.name || !POOL_IDS.has(next.poolId)) return toast("请检查常用消费信息");
+    if (preset) Object.assign(preset, next); else state.presets.push(next);
+    save(); closeSheet(); render(); toast("常用消费已保存");
   };
-  if (record) document.querySelector("[data-delete]").onclick = () => { if (confirm("确定删除这笔记录吗？金额会加回余额。")) { project.records = project.records.filter(item => item.id !== record.id); saveState(); closeSheet(); render(); toast("记录已删除，金额已加回"); } };
-  setTimeout(() => nameInput.focus(), 100);
+  if (preset) form.querySelector("[data-delete-preset]").onclick = () => {
+    if (!confirm("删除这个常用消费吗？已有记录不会改变。")) return;
+    state.presets = state.presets.filter(item => item.id !== id);
+    save(); closeSheet(); render();
+  };
 }
-
-function openTypeSheet(oldType = "") {
-  sheet(oldType ? "编辑消费类型" : "新增消费类型", `<form id="type-form"><label class="field"><span>类型名称</span><input name="name" required maxlength="12" value="${escapeHtml(oldType)}" placeholder="例如：宠物"></label><div class="sheet-actions">${oldType ? `<button class="danger" type="button" data-delete>删除</button>` : ""}<button class="primary" type="submit">保存</button></div></form>`);
-  const form = document.querySelector("#type-form"); form.onsubmit = event => { event.preventDefault(); const name = new FormData(form).get("name").trim(); if (!oldType && state.types.includes(name)) return toast("这个类型已经存在"); if (oldType) { state.types = state.types.map(item => item === oldType ? name : item); state.presets.forEach(item => { if (item.type === oldType) item.type = name; }); state.projects.forEach(project => { project.records.forEach(item => { if (item.type === oldType) item.type = name; }); if (project.filterType === oldType) project.filterType = name; }); } else state.types.push(name); saveState(); closeSheet(); render(); };
-  if (oldType) document.querySelector("[data-delete]").onclick = () => { if (confirm(`删除“${oldType}”类型吗？已有记录会变为未分类。`)) { state.types = state.types.filter(item => item !== oldType); state.presets.forEach(item => { if (item.type === oldType) item.type = ""; }); state.projects.forEach(project => { project.records.forEach(item => { if (item.type === oldType) item.type = ""; }); if (project.filterType === oldType) project.filterType = "all"; }); saveState(); closeSheet(); render(); } };
-}
-
-function openPresetSheet(presetId = null) {
-  const preset = state.presets.find(item => item.id === presetId);
-  sheet(preset ? "编辑常用名称" : "新增常用名称", `<form id="preset-form"><label class="field"><span>常用消费名称</span><input name="name" required maxlength="30" value="${escapeHtml(preset?.name || "")}" placeholder="例如：奶茶"></label><label class="field"><span>识别关键词（用逗号分隔）</span><input class="keyword-box" name="keywords" value="${escapeHtml(preset?.keywords.join("，") || "")}" placeholder="奶茶，霸王茶姬，喜茶"></label><label class="field"><span>关联消费类型（可不选）</span><select name="type">${typeOptions(preset?.type || "")}</select></label><div class="sheet-actions">${preset ? `<button class="danger" type="button" data-delete>删除</button>` : ""}<button class="primary" type="submit">保存</button></div></form>`);
-  const form = document.querySelector("#preset-form"); form.onsubmit = event => { event.preventDefault(); const data = new FormData(form); const next = { id: preset?.id || uid(), name: data.get("name").trim(), keywords: data.get("keywords").split(/[，,]/).map(item => item.trim()).filter(Boolean), type: data.get("type") }; if (preset) Object.assign(preset, next); else state.presets.push(next); saveState(); closeSheet(); render(); toast("预设已保存"); };
-  if (preset) document.querySelector("[data-delete]").onclick = () => { state.presets = state.presets.filter(item => item.id !== preset.id); saveState(); closeSheet(); render(); };
-}
-
 function exportData() {
-  const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = `余下备份-${today()}.json`; link.click(); URL.revokeObjectURL(url); toast("备份已导出");
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob), link = document.createElement("a");
+  link.href = url; link.download = "余下月度备份-" + todayLocal() + ".json"; link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000); toast("备份已导出");
 }
-
 document.querySelector("#import-file").addEventListener("change", async event => {
   const file = event.target.files[0];
   if (!file) return;
   try {
-    const imported = normalizeState(JSON.parse(await file.text()));
-    if (!confirm("导入备份会覆盖当前全部数据，确定继续吗？")) return;
-    state = imported;
-    saveState();
-    navigate("home");
-    toast("备份已恢复");
-  } catch {
-    toast("无法读取这个备份文件");
-  } finally {
-    event.target.value = "";
-  }
+    const imported = validateState(JSON.parse(await file.text()));
+    if (!confirm("导入备份会覆盖当前全部月度数据，确定继续吗？")) return;
+    state = imported; ensureMonth(state, nowMonth()); save(); navigate("home", nowMonth()); toast("备份已导入");
+  } catch { toast("无法读取备份；请使用新版月度账本导出的 JSON"); }
+  finally { event.target.value = ""; }
 });
-
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js");
 render();
