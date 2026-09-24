@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { createState, ensureMonth } from "../core.mjs";
 
-test("home lists one current month and budget details expand without changing records", async () => {
+for (const startMode of ["current", "list"]) test(`startup ${startMode} and budget details preserve records`, async () => {
   const app = { innerHTML: "" };
   const sheet = { innerHTML: "" };
   const fileInput = { addEventListener() {} };
@@ -12,6 +12,7 @@ test("home lists one current month and budget details expand without changing re
   const monthButton = { dataset: { month: currentMonth }, onclick: null };
   const toggleButton = { dataset: { action: "toggle-pools" }, onclick: null };
   const fixture = createState();
+  fixture.startPage = { mode: startMode };
   ensureMonth(fixture, currentMonth).records.push({ id: "lunch", name: "日常消费", amount: 1200, poolId: "daily", tagIds: [], date: currentMonth + "-01" });
   globalThis.localStorage = { getItem: () => JSON.stringify(fixture), setItem() {} };
   globalThis.window = { scrollTo() {} };
@@ -25,14 +26,19 @@ test("home lists one current month and budget details expand without changing re
   };
 
   const source = (await readFile(new URL("../app.js", import.meta.url), "utf8"))
-    .replace('"./core.mjs"', JSON.stringify(new URL("../core.mjs", import.meta.url).href));
-  await import("data:text/javascript," + encodeURIComponent(source));
+    .replace('"./core.mjs?v=26"', JSON.stringify(new URL("../core.mjs", import.meta.url).href));
+  await import("data:text/javascript," + encodeURIComponent(source) + "#" + startMode);
 
-  assert.equal((app.innerHTML.match(/class="month-row /g) || []).length, 1);
-  assert.match(app.innerHTML, /新增月份/);
+  if (startMode === "list") {
+    assert.equal((app.innerHTML.match(/class="month-row /g) || []).length, 1);
+    assert.match(app.innerHTML, /新增月份/);
+    monthButton.onclick();
+  } else {
+    assert.match(app.innerHTML, /＋ 记一笔/);
+    assert.match(app.innerHTML, /‹ 月份/);
+  }
   assert.doesNotMatch(app.innerHTML, /看见每一类还剩多少|月度倒扣记账|本月预算正在使用/);
 
-  monthButton.onclick();
   assert.match(app.innerHTML, new RegExp(currentMonth.replace("-", "") + " 预算池"));
   assert.doesNotMatch(app.innerHTML, /month-hero/);
   assert.match(app.innerHTML, /budget-compact/);

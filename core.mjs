@@ -36,6 +36,7 @@ export function monthLabel(month) {
 export function createState() {
   return {
     version: 2,
+    startPage: { mode: "current" },
     budgetHistory: [{ from: "0000-01", budgets: { ...DEFAULT_BUDGETS } }],
     months: {},
     tags: [{ id: "avoid", name: "可避免" }],
@@ -50,6 +51,14 @@ export function createState() {
     recurring: [],
     installments: []
   };
+}
+export function startupRoute(state, currentMonth) {
+  const preference = state.startPage;
+  if (preference?.mode === "list") return { page: "home", month: currentMonth };
+  const selected = preference?.month;
+  const month = preference?.mode === "month" && MONTH_RE.test(selected) &&
+    selected <= currentMonth && Object.hasOwn(state.months, selected) ? selected : currentMonth;
+  return { page: "month", month };
 }
 export function budgetsFor(state, month) {
   const revisions = [...state.budgetHistory].sort((a, b) => a.from.localeCompare(b.from));
@@ -188,5 +197,9 @@ export function validateState(value) {
         !validMoney(item.paidAmount) || Number(item.paidAmount) === 0 ||
         !validPool(item.poolId) || !validTags(item.tagIds)) fail();
   }
+  const preference = value.startPage;
+  value.startPage = preference?.mode === "list" ? { mode: "list" } :
+    preference?.mode === "month" && MONTH_RE.test(preference.month) ?
+      { mode: "month", month: preference.month } : { mode: "current" };
   return value;
 }

@@ -1,4 +1,4 @@
-import { POOLS, POOL_IDS, MONTH_RE, DATE_RE, monthOf, todayLocal, shiftMonth, endOfMonth, monthLabel, createState, budgetsFor, setBudgets, ensureMonth, monthlyEntries, monthlyTotals, matchPreset, validateState, roundMoney } from "./core.mjs";
+import { POOLS, POOL_IDS, MONTH_RE, DATE_RE, monthOf, todayLocal, shiftMonth, endOfMonth, monthLabel, createState, startupRoute, budgetsFor, setBudgets, ensureMonth, monthlyEntries, monthlyTotals, matchPreset, validateState, roundMoney } from "./core.mjs?v=26";
 
 const STORAGE_KEY = "yuxia-monthly-v1";
 const money = value => new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY", maximumFractionDigits: 2 }).format(Number(value) || 0);
@@ -16,7 +16,7 @@ function loadState() {
   } catch { return createState(); }
 }
 let state = loadState();
-let route = { page: "home", month: nowMonth() };
+let route = startupRoute(state, nowMonth());
 let settingsReturn = "home";
 let poolsExpanded = false;
 const currentMonthWasMissing = !state.months[nowMonth()];
@@ -127,6 +127,7 @@ function installmentStatus(item) {
 function settingsView() {
   const budgets = budgetsFor(state, nowMonth());
   return `<main class="app-shell settings-page"><header class="topbar"><button class="back-button" data-action="back-month">‹ 返回</button><h1>设置</h1><span style="width:42px"></span></header>
+    <section class="settings-section"><div class="section-title"><h2>打开时显示</h2></div><div class="setting-card"><button class="setting-row" data-action="startup"><strong>${state.startPage?.mode === "list" ? "月份列表" : state.startPage?.mode === "month" ? esc(monthLabel(state.startPage.month)) : "当前月份"}</strong><span>修改 ›</span></button></div></section>
     <section class="settings-section"><div class="section-title"><h2>预算设置</h2><button class="text-button" data-action="budget">修改</button></div><p>修改本月与以后月份的额度，过去月份保持原样。</p><div class="setting-card">${POOLS.map(pool => `<div class="setting-row static-row"><span><strong>${pool.name}</strong><span class="subtle">${pool.hint}</span></span><b>${money(budgets[pool.id])}</b></div>`).join("")}</div></section>
     <section class="settings-section"><div class="section-title"><h2>固定消费</h2><button class="text-button" data-action="new-fixed">＋ 新增</button></div><p>启用后每个月自动计入对应预算池。</p><div class="setting-card">${state.recurring.length ? state.recurring.map(item => `<button class="setting-row" data-fixed="${esc(item.id)}"><span><strong>${esc(item.name)}</strong><span class="subtle">${poolName(item.poolId)} · ${fixedIsActive(item) ? "已启用" : "已停用"}</span></span><span>${money(item.amount)} ›</span></button>`).join("") : '<div class="setting-empty">还没有固定消费</div>'}</div></section>
     <section class="settings-section"><div class="section-title"><h2>分摊消费</h2><button class="text-button" data-action="new-installment">＋ 新增</button></div><p>实际支付一次，预算按月计入。</p><div class="setting-card">${state.installments.length ? state.installments.map(item => `<button class="setting-row" data-installment="${esc(item.id)}"><span><strong>${esc(item.name)}</strong><span class="subtle">${poolName(item.poolId)} · ${installmentStatus(item)}</span></span><span>${money(item.paidAmount)} / ${item.months}月 ›</span></button>`).join("") : '<div class="setting-empty">还没有分摊消费</div>'}</div></section>
@@ -156,6 +157,7 @@ function bindEvents() {
     else if (action === "new-record") openRecordSheet();
     else if (action === "sort") openChoiceSheet("sort");
     else if (action === "filter") openChoiceSheet("filter");
+    else if (action === "startup") openStartupSheet();
     else if (action === "budget") openBudgetSheet();
     else if (action === "new-fixed") openFixedSheet();
     else if (action === "new-installment") openInstallmentSheet();
@@ -164,6 +166,27 @@ function bindEvents() {
     else if (action === "export") exportData();
     else if (action === "import") document.querySelector("#import-file").click();
   });
+}
+function openStartupSheet() {
+  const preference = state.startPage || { mode: "current" };
+  const selectedMonth = preference.month || route.month;
+  sheet("打开时显示", `<form id="startup-form">
+    <label class="field"><span>默认展示</span><select name="mode">${[["current", "当前月份（自动跟随月份）"], ["list", "月份列表"], ["month", "指定月份"]].map(([value, label]) => `<option value="${value}" ${preference.mode === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+    <label class="field" id="startup-month-field" ${preference.mode === "month" ? "" : "hidden"}><span>选择月份</span><select name="month">${monthList().map(month => `<option value="${month}" ${selectedMonth === month ? "selected" : ""}>${monthLabel(month)}</option>`).join("")}</select></label>
+    <p class="helper">下次打开生效。当前月份会自动切换到新的自然月。</p>
+    <div class="sheet-actions"><button class="primary" type="submit">保存</button></div></form>`);
+  const form = document.querySelector("#startup-form");
+  form.elements.mode.onchange = () => {
+    document.querySelector("#startup-month-field").hidden = form.elements.mode.value !== "month";
+  };
+  form.onsubmit = event => {
+    event.preventDefault();
+    const mode = form.elements.mode.value, month = form.elements.month.value;
+    if (!["current", "list", "month"].includes(mode)) return;
+    if (mode === "month" && !monthList().includes(month)) return toast("请选择已有月份");
+    state.startPage = mode === "month" ? { mode, month } : { mode };
+    save(); closeSheet(); render(); toast("默认展示已保存，下次打开生效");
+  };
 }
 function openMonthSheet() {
   sheet("新增月份", `<form id="month-form"><label class="field"><span>选择月份</span><input name="month" required type="month" max="${nowMonth()}" value="${shiftMonth(nowMonth(), -1)}"></label><div class="sheet-actions"><button class="primary" type="submit">进入月份</button></div></form>`);

@@ -74,6 +74,7 @@ button { color: inherit; }
 .sheet-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
 .sheet-head h2 { margin: 0; font-size: 22px; }
 .close { border: 0; background: #ece5da; width: 34px; height: 34px; border-radius: 50%; }
+.field[hidden] { display: none; }
 .field { display: block; margin-bottom: 17px; }
 .field > span { display: block; font-size: 13px; color: var(--muted); margin: 0 0 7px 3px; }
 .field input, .field select { width: 100%; min-height: 50px; border: 1px solid var(--line); background: white; border-radius: 15px; padding: 0 14px; outline: none; }
